@@ -1,0 +1,12 @@
+**/.git
+**/.gitignore
+**/venv
+**/.venv
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/*.pyd
+.pytest_cache
+*.db
+*.sqlite
+iran_market_radar.db

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "StrategyDefinition",
+  "type": "object",
+  "required": ["key", "version", "enabled", "supported_horizons", "required_features"],
+  "properties": {
+    "key": {"type": "string"},
+    "version": {"type": "string"},
+    "enabled": {"type": "boolean"},
+    "experimental": {"type": "boolean"},
+    "supported_horizons": {"type": "array", "items": {"type": "string"}},
+    "supported_instrument_classes": {"type": "array", "items": {"type": "string"}},
+    "required_features": {"type": "array", "items": {"type": "string"}},
+    "parameters": {"type": "object"},
+    "minimum_history_sessions": {"type": "integer"},
+    "minimum_data_quality": {"type": "number"},
+    "entry_model": {"type": "string"},
+    "invalidation_model": {"type": "string"},
+    "exit_model": {"type": "string"}
+  }
+}

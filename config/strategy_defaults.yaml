@@ -1,0 +1,61 @@
+# Bootstrap defaults only. Production values must be validated OOS.
+strategy_engine:
+  default_horizons: ["1d", "3d", "5d", "10d", "20d"]
+  actionable_horizons: ["3d", "5d", "10d"]
+  min_data_quality_score: 85
+  min_history_sessions: 260
+
+universe:
+  include_instrument_classes: ["equity", "equity_etf"]
+  include_rights: false
+  exclude_if_suspended: true
+  min_avg_daily_value_20d: null   # set after inspecting current currency/unit distribution
+  min_active_sessions_ratio_60d: 0.85
+
+strategies:
+  cross_sectional_momentum:
+    enabled: true
+    lookbacks: [20, 60, 120]
+    sector_neutral_component: true
+  time_series_trend:
+    enabled: true
+    lookbacks: [20, 60]
+  breakout_volume:
+    enabled: true
+    breakout_lookbacks: [20, 55]
+    robust_volume_z_min: 1.5
+  trend_pullback:
+    enabled: true
+  selective_mean_reversion:
+    enabled: true
+    regime_gate: true
+  volume_anomaly:
+    enabled: true
+  client_flow:
+    enabled: true
+    require_client_type_data: true
+  orderbook_queue:
+    enabled: false
+    experimental: true
+    require_min_snapshot_history_days: 60
+  sector_rotation:
+    enabled: true
+  fundamental_quality_value:
+    enabled: false
+    enable_after_sedra: true
+  fundamental_momentum:
+    enabled: false
+    enable_after_sedra: true
+  codal_event:
+    enabled: false
+    enable_after_sedra: true
+  ml_ranker:
+    enabled: false
+    enable_after_backtester_and_point_in_time_dataset: true
+
+publication:
+  min_opportunity_score: 70
+  min_confidence: 55
+  # p_profit threshold is horizon/base-rate dependent and should be set from calibration evidence.
+  require_positive_expected_edge_after_costs: true
+  max_published_per_horizon: 25

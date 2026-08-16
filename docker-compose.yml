@@ -1,0 +1,77 @@
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: iran_market_radar_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: iran_market_radar
+      POSTGRES_USER: radar_user
+      POSTGRES_PASSWORD: radar_secure_password_2026
+    ports:
+      - "${RADAR_POSTGRES_PORT:-5742}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U radar_user -d iran_market_radar"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: iran_market_radar_redis
+    restart: unless-stopped
+    ports:
+      - "${RADAR_REDIS_PORT:-6742}:6379"
+    volumes:
+      - redis_data:/data
+
+  api:
+    build:
+      context: .
+      dockerfile: infra/docker/Dockerfile.api
+    container_name: iran_market_radar_api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    env_file:
+      - .env
+    environment:
+      APP_ENV: production
+      APP_PORT: 8742
+      DATABASE_URL: postgresql+asyncpg://radar_user:radar_secure_password_2026@postgres:5432/iran_market_radar
+      DATABASE_SYNC_URL: postgresql://radar_user:radar_secure_password_2026@postgres:5432/iran_market_radar
+      REDIS_URL: redis://redis:6379/0
+      TRADING_MODE: paper
+      LIVE_TRADING_ENABLED: "false"
+      RISK_KILL_SWITCH_ARMED: "true"
+      INITIAL_PORTFOLIO_CASH_RIALS: 100000000000
+      SESSION_SECRET: ${SESSION_SECRET:-radar_institutional_grade_jwt_secret_key_2026_iran_stock_market_secure_7788}
+      RADAR_ADMIN_USER: ${RADAR_ADMIN_USER:-admin}
+      RADAR_ADMIN_PASSWORD: ${RADAR_ADMIN_PASSWORD:-radar2026}
+    ports:
+      - "${APP_PORT:-8742}:${APP_PORT:-8742}"
+
+  web:
+    build:
+      context: .
+      dockerfile: infra/docker/Dockerfile.web
+    container_name: iran_market_radar_web
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      PORT: 3000
+      HOSTNAME: 0.0.0.0
+      API_INTERNAL_URL: "http://api:${APP_PORT:-8742}/api/v1/:path*"
+    ports:
+      - "${WEB_PORT:-3742}:3000"
+
+volumes:
+  postgres_data:
+  redis_data:

@@ -1,0 +1,27 @@
+data_sources:
+  tsetmc:
+    enabled: true
+    adapter: "official_rest"
+    docs_url: "https://api.tsetmc.com/docs/"
+    # Actual endpoint/auth/rate values MUST be read from current official docs.
+    max_concurrency: 4
+    request_timeout_seconds: 20
+    retry_attempts: 5
+    backoff_initial_seconds: 1
+  sedra:
+    enabled: false
+    adapter: "official_rest"
+    enable_when_credentials_available: true
+
+cadence:
+  instrument_master_minutes: 1440
+  market_watch_seconds: 10
+  orderbook_seconds: 10
+  client_type_seconds: 30
+  codal_poll_seconds: 120
+  eod_reconcile_after_session_minutes: 20
+
+quality:
+  critical_market_stale_seconds: 60
+  max_duplicate_ratio: 0.001
+  minimum_symbol_completeness_ratio: 0.98

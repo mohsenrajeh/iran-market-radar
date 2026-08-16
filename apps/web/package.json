@@ -1,0 +1,25 @@
+{
+  "name": "iran-market-radar-web",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev -p 3742",
+    "build": "next build",
+    "start": "next start -p 3742",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "lucide-react": "^0.414.0",
+    "next": "^14.2.5",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "vazirmatn": "^33.0.3"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.12",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "playwright": "^1.62.1",
+    "typescript": "^5.5.4"
+  }
+}

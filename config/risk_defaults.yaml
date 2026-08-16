@@ -1,0 +1,25 @@
+# Paper mode bootstrap. Values are intentionally conservative and configurable.
+risk:
+  risk_per_trade_pct_nav: 0.005
+  max_position_pct_nav: 0.10
+  max_sector_pct_nav: 0.25
+  max_open_positions: 10
+  max_gross_exposure_pct_nav: 0.80
+  max_daily_new_risk_pct_nav: 0.02
+  max_drawdown_kill_switch_pct: 0.12
+  min_liquidity_score: 60
+  max_participation_pct_of_expected_volume: 0.05
+  stale_data_block_seconds: 60
+
+execution:
+  default_order_type: "limit"
+  max_chase_atr_fraction: 0.25
+  conservative_queue_fill: true
+  allow_partial_fill: true
+  entry_expiry_sessions: 2
+
+live_trading:
+  enabled: false
+  require_authorized_broker_adapter: true
+  require_reconciliation: true
+  require_kill_switch_armed: true
