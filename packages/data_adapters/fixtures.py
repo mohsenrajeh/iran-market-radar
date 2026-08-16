@@ -115,6 +115,12 @@ FIXTURE_INSTRUMENTS = [
     {"ticker": "رمپنا", "name_fa": "گروه مپنا", "isin": "IRO1MAPN0001", "sector_code": "38", "base_price": 10800.0, "volatility": 0.018},
     {"ticker": "ثفارس", "name_fa": "عمران و مسکن سازان فارس", "isin": "IRO1OMSF0001", "sector_code": "70", "base_price": 8900.0, "volatility": 0.032},
     {"ticker": "ثامید", "name_fa": "توسعه و عمران امید", "isin": "IRO1TAMD0001", "sector_code": "70", "base_price": 1700.0, "volatility": 0.026},
+
+    # صندوق‌های سرمایه‌گذاری طلا و اهرمی
+    {"ticker": "عیار", "name_fa": "صندوق طلای لوتوس", "isin": "IRO7AYAR0001", "sector_code": "68", "base_price": 525150.0, "volatility": 0.015},
+    {"ticker": "طلا", "name_fa": "صندوق طلای لوتوس طلا", "isin": "IRO7TALA0001", "sector_code": "68", "base_price": 485000.0, "volatility": 0.016},
+    {"ticker": "اهرم", "name_fa": "صندوق اهرمی کاریزما", "isin": "IRO7AHRM0001", "sector_code": "68", "base_price": 21400.0, "volatility": 0.035},
+    {"ticker": "جهش", "name_fa": "صندوق اهرمی جهش فارابی", "isin": "IRO7JHSH0001", "sector_code": "68", "base_price": 18500.0, "volatility": 0.034},
 ]
 
 
