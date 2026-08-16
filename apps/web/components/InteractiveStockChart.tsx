@@ -80,36 +80,8 @@ export const InteractiveStockChart: React.FC<InteractiveStockChartProps> = ({
   // Take the last 40 bars for optimal institutional visual clarity
   const data: Bar[] = useMemo(() => {
     if (!bars || !Array.isArray(bars) || bars.length === 0) return [];
-    const raw = bars.slice(-40);
-    
-    // Add enriched sample trade markers and corporate action markers for demonstration if not already present
-    return raw.map((b, idx, arr) => {
-      const isLast = idx === arr.length - 1;
-      const isThirdFromLast = idx === arr.length - 4;
-      const isSeventhFromLast = idx === arr.length - 8;
-      
-      let corpAction: string | null = b.corporate_action || null;
-      let stageEntry = b.stage_entry || null;
-      let exitMarker = b.exit_marker || null;
-
-      if (!corpAction && idx === 12) {
-        corpAction = "مجمع عمومی (تقسیم سود)";
-      }
-
-      if (!stageEntry && isSeventhFromLast && isGoodStock) {
-        stageEntry = { stage: 1, pct: 40, qty: 150000, price: Math.round(b.close) };
-      } else if (!stageEntry && isThirdFromLast && isGoodStock) {
-        stageEntry = { stage: 2, pct: 35, qty: 130000, price: Math.round(b.close * 1.01) };
-      }
-
-      return {
-        ...b,
-        corporate_action: corpAction,
-        stage_entry: stageEntry,
-        exit_marker: exitMarker,
-      };
-    });
-  }, [bars, isGoodStock]);
+    return bars.slice(-40);
+  }, [bars]);
 
   // Compute EMA 9 and EMA 21
   const emaData = useMemo(() => {
@@ -169,7 +141,7 @@ export const InteractiveStockChart: React.FC<InteractiveStockChartProps> = ({
   }, [data, rsiValue]);
 
   // Dimensions & Multi-Pane Layout
-  const svgWidth = 1020;
+  const svgWidth = 1040;
   const candlePaneTop = 25;
   const candlePaneHeight = 280;
   
@@ -181,7 +153,7 @@ export const InteractiveStockChart: React.FC<InteractiveStockChartProps> = ({
   
   const totalHeight = rsiPaneTop + rsiPaneHeight + 35;
   const leftPadding = 80;
-  const rightPadding = 185; // Gutter for labels on right price scale
+  const rightPadding = 195; // Gutter for labels on right price scale
   const chartW = svgWidth - leftPadding - rightPadding;
 
   // Active prices evaluation
@@ -436,6 +408,7 @@ export const InteractiveStockChart: React.FC<InteractiveStockChartProps> = ({
 
       {/* ── 2. Master SVG Financial Chart Engine ────────────────────────── */}
       <div
+        dir="ltr"
         style={{
           backgroundColor: "#080d1a",
           borderRadius: "10px",
@@ -443,6 +416,7 @@ export const InteractiveStockChart: React.FC<InteractiveStockChartProps> = ({
           padding: "0.5rem",
           overflowX: "auto",
           position: "relative",
+          direction: "ltr",
         }}
       >
         <svg
@@ -513,7 +487,7 @@ export const InteractiveStockChart: React.FC<InteractiveStockChartProps> = ({
                   fill="#64748b"
                   fontSize="10"
                   textAnchor="end"
-                  fontFamily="sans-serif"
+                  fontFamily="Vazirmatn, system-ui, sans-serif"
                 >
                   {formatFa(pVal)}
                 </text>
@@ -646,6 +620,14 @@ export const InteractiveStockChart: React.FC<InteractiveStockChartProps> = ({
                     strokeDasharray={lvl.dash !== "0" ? lvl.dash : undefined}
                   />
 
+                  {/* Small Anchor Dot on Level Line End */}
+                  <circle
+                    cx={leftPadding + chartW}
+                    cy={lvl.y}
+                    r={3}
+                    fill={lvl.color}
+                  />
+
                   {/* Leader connector if shifted by collision avoidance */}
                   {Math.abs(adjustedBadgeY - lvl.y) > 2 && (
                     <line
@@ -662,21 +644,22 @@ export const InteractiveStockChart: React.FC<InteractiveStockChartProps> = ({
                   {/* Anti-collision Gutter Badge on Price Scale */}
                   <rect
                     x={leftPadding + chartW + 6}
-                    y={adjustedBadgeY - 10}
-                    width={172}
-                    height={20}
+                    y={adjustedBadgeY - 12}
+                    width={184}
+                    height={24}
                     fill={lvl.bg}
-                    rx={4}
+                    rx={6}
                     stroke={lvl.stroke}
                     strokeWidth={1}
                   />
                   <text
-                    x={leftPadding + chartW + 12}
+                    x={leftPadding + chartW + 6 + 92}
                     y={adjustedBadgeY + 4}
                     fill={lvl.text}
                     fontSize="9.5"
                     fontWeight="bold"
-                    fontFamily="sans-serif"
+                    fontFamily="Vazirmatn, system-ui, sans-serif"
+                    textAnchor="middle"
                   >
                     {`${lvl.name}: ${formatFa(lvl.price)} ﷼ (${lvl.rMultiple})`}
                   </text>
@@ -995,7 +978,7 @@ export const InteractiveStockChart: React.FC<InteractiveStockChartProps> = ({
                 fill="#64748b"
                 fontSize="9"
                 textAnchor="middle"
-                fontFamily="sans-serif"
+                fontFamily="Vazirmatn, system-ui, sans-serif"
               >
                 {typeof b.trading_date === "string" ? b.trading_date.slice(5) : String(b.trading_date || "")}
               </text>
