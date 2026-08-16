@@ -56,6 +56,11 @@ services:
       RADAR_ADMIN_PASSWORD: ${RADAR_ADMIN_PASSWORD:-radar2026}
     ports:
       - "${APP_PORT:-8742}:${APP_PORT:-8742}"
+    volumes:
+      - ./packages:/app/packages
+      - ./services:/app/services
+      - ./apps/api:/app/apps/api
+      - ./scripts:/app/scripts
 
   web:
     build:

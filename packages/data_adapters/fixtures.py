@@ -37,21 +37,22 @@ FIXTURE_INSTRUMENTS = [
 
     # محصولات شیمیایی و پتروشیمی
     {"ticker": "فارس", "name_fa": "صنایع پتروشیمی خلیج فارس", "isin": "IRO1PKHF0001", "sector_code": "44_CHEM", "base_price": 12800.0, "volatility": 0.015},
-    {"ticker": "نوری", "name_fa": "پتروشیمی نوری", "isin": "IRO1PBNR0001", "sector_code": "44_CHEM", "base_price": 265000.0, "volatility": 0.019},
+    {"ticker": "نوری", "name_fa": "پتروشیمی نوری", "isin": "IRO1PBNR0001", "sector_code": "44_CHEM", "base_price": 35740.0, "volatility": 0.019},
     {"ticker": "شپدیس", "name_fa": "پتروشیمی پردیس", "isin": "IRO1PDIS0001", "sector_code": "44_CHEM", "base_price": 245000.0, "volatility": 0.020},
     {"ticker": "زاگرس", "name_fa": "پتروشیمی زاگرس", "isin": "IRO3PZAG0001", "sector_code": "44_CHEM", "base_price": 210000.0, "volatility": 0.021},
     {"ticker": "پترول", "name_fa": "گروه پتروشیمی س. ایرانیان", "isin": "IRO3GPI10001", "sector_code": "44_CHEM", "base_price": 1850.0, "volatility": 0.026},
     {"ticker": "آریا", "name_fa": "پلیمر آریا ساسول", "isin": "IRO3PASZ0001", "sector_code": "44_CHEM", "base_price": 185000.0, "volatility": 0.017},
     {"ticker": "شگویا", "name_fa": "پتروشیمی شهید تندگویان", "isin": "IRO3PGO10001", "sector_code": "44_CHEM", "base_price": 13400.0, "volatility": 0.023},
+    {"ticker": "شپلی", "name_fa": "پلی اکریل ایران", "isin": "IRO1PLYI0001", "sector_code": "44_CHEM", "base_price": 5210.0, "volatility": 0.025},
     {"ticker": "تاپیکو", "name_fa": "سرمایه گذاری نفت و گاز تامین", "isin": "IRO1TOPC0001", "sector_code": "44_CHEM", "base_price": 19500.0, "volatility": 0.018},
     {"ticker": "شاراک", "name_fa": "پتروشیمی شازند", "isin": "IRO1PSHZ0001", "sector_code": "44_CHEM", "base_price": 36000.0, "volatility": 0.021},
 
     # پالایشی و فرآورده‌های نفتی
-    {"ticker": "شپنا", "name_fa": "پالایش نفت اصفهان", "isin": "IRO1PNES0001", "sector_code": "23", "base_price": 9850.0, "volatility": 0.022},
-    {"ticker": "شبندر", "name_fa": "پالایش نفت بندرعباس", "isin": "IRO1PNBA0001", "sector_code": "23", "base_price": 11200.0, "volatility": 0.023},
-    {"ticker": "شتران", "name_fa": "پالایش نفت تهران", "isin": "IRO1PNTN0001", "sector_code": "23", "base_price": 4680.0, "volatility": 0.024},
+    {"ticker": "شاوان", "name_fa": "پالایش نفت لاوان", "isin": "IRO3PNL10001", "sector_code": "23", "base_price": 26340.0, "volatility": 0.023},
+    {"ticker": "شپنا", "name_fa": "پالایش نفت اصفهان", "isin": "IRO1PNES0001", "sector_code": "23", "base_price": 4150.0, "volatility": 0.022},
+    {"ticker": "شبندر", "name_fa": "پالایش نفت بندرعباس", "isin": "IRO1PNBA0001", "sector_code": "23", "base_price": 8500.0, "volatility": 0.023},
+    {"ticker": "شتران", "name_fa": "پالایش نفت تهران", "isin": "IRO1PNTN0001", "sector_code": "23", "base_price": 2450.0, "volatility": 0.024},
     {"ticker": "شبریز", "name_fa": "پالایش نفت تبریز", "isin": "IRO1PNTB0001", "sector_code": "23", "base_price": 43240.0, "volatility": 0.023},
-    {"ticker": "شاوان", "name_fa": "پالایش نفت لاوان", "isin": "IRO3PNL10001", "sector_code": "23", "base_price": 24500.0, "volatility": 0.025},
 
     # خودرو و قطعات
     {"ticker": "خودرو", "name_fa": "ایران خودرو", "isin": "IRO1IKCO0001", "sector_code": "44", "base_price": 2950.0, "volatility": 0.028},
@@ -80,6 +81,7 @@ FIXTURE_INSTRUMENTS = [
     {"ticker": "کگل", "name_fa": "معدنی و صنعتی گل گهر", "isin": "IRO1GOLG0001", "sector_code": "13", "base_price": 6850.0, "volatility": 0.018},
     {"ticker": "ومعادن", "name_fa": "توسعه معادن و فلزات", "isin": "IRO1TMDN0001", "sector_code": "13", "base_price": 5400.0, "volatility": 0.019},
     {"ticker": "کگهر", "name_fa": "سنگ آهن گهر زمین", "isin": "IRO3GHR10001", "sector_code": "13", "base_price": 48500.0, "volatility": 0.021},
+    {"ticker": "کاما", "name_fa": "باما", "isin": "IRO1BAMA0001", "sector_code": "13", "base_price": 4240.0, "volatility": 0.026},
     {"ticker": "فزر", "name_fa": "پویا زرکان آق دره", "isin": "IRO3PZR10001", "sector_code": "13", "base_price": 204300.0, "volatility": 0.026},
 
     # دارویی

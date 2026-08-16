@@ -9,7 +9,7 @@ Complete database reset and sync script:
 import sys
 import os
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 # Ensure project root is in sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -86,77 +86,50 @@ def reset_and_seed_market():
         # 4. Generate 260-day historical EOD bars & Client Type flow
         logger.info("📊 Generating 260-day price history and client-flow for all instruments...")
         adapter = FixtureReplayAdapter(seed=42)
-        today = datetime.now(timezone.utc).date()
         instruments = db.query(Instrument).all()
+        import asyncio
 
         for inst in instruments:
-            fix_item = next((x for x in FIXTURE_INSTRUMENTS if x["ticker"] == inst.ticker), None)
-            base_p = fix_item["base_price"] if fix_item else 5000.0
-            volat = fix_item["volatility"] if fix_item else 0.02
-
-            # Simulate price walk ending near base_price
-            price_walk = [base_p]
-            rng_state = 100 + len(inst.ticker) * 17
-            import random
-            inst_rng = random.Random(rng_state)
-
-            curr = base_p * 0.85  # started 15% lower 260 days ago
-            for d_idx in range(260):
-                ret = inst_rng.gauss(0.0006, volat)
-                curr = max(base_p * 0.4, curr * (1.0 + ret))
-                price_walk.append(curr)
-
-            for d_idx in range(260):
-                bar_date = today - timedelta(days=(260 - d_idx))
-                if bar_date.weekday() in (3, 4):  # Skip Thursday & Friday
-                    continue
-
-                p_close = round(price_walk[d_idx], 1)
-                p_open = round(p_close * (1.0 + inst_rng.gauss(0.0, 0.008)), 1)
-                p_high = round(max(p_open, p_close) * (1.0 + abs(inst_rng.gauss(0.005, 0.006))), 1)
-                p_low = round(min(p_open, p_close) * (1.0 - abs(inst_rng.gauss(0.005, 0.006))), 1)
-                vol = int(inst_rng.uniform(1_500_000, 25_000_000))
-                val = float(p_close * vol)
-
+            bars_data = asyncio.run(adapter.fetch_eod_history(inst.ticker, days=260))
+            for b in bars_data:
+                b_date = date.fromisoformat(b["trading_date"])
                 bar = EODBar(
+                    id=f"eod_{inst.ticker}_{b['trading_date']}",
                     instrument_id=inst.id,
-                    trading_date=bar_date,
-                    open=p_open,
-                    high=p_high,
-                    low=p_low,
-                    close=p_close,
-                    last=p_close,
-                    yesterday_price=round(p_close * 0.985, 1),
-                    volume=vol,
-                    value=val,
-                    trade_count=int(vol / inst_rng.uniform(800, 3000)),
-                    allowed_min=round(p_close * 0.93, 1),
-                    allowed_max=round(p_close * 1.07, 1),
+                    trading_date=b_date,
+                    open=b["open"],
+                    high=b["high"],
+                    low=b["low"],
+                    close=b["close"],
+                    last=b["last"],
+                    yesterday_price=b["yesterday_price"],
+                    volume=b["volume"],
+                    value=b["value"],
+                    trade_count=b["trade_count"],
+                    allowed_min=b["allowed_min"],
+                    allowed_max=b["allowed_max"],
                 )
                 db.add(bar)
 
-                # Client type snapshot
-                r_buy_ratio = inst_rng.uniform(0.65, 0.92)
-                r_buy_val = val * r_buy_ratio
-                l_buy_val = val - r_buy_val
-                r_sell_val = val * inst_rng.uniform(0.55, 0.85)
-                l_sell_val = val - r_sell_val
-
+            ct_data = asyncio.run(adapter.fetch_client_type_history(inst.ticker, days=260))
+            for ct_item in ct_data:
+                ct_date = date.fromisoformat(ct_item["trading_date"])
                 ct = ClientTypeSnapshot(
+                    id=f"ct_{inst.ticker}_{ct_item['trading_date']}",
                     instrument_id=inst.id,
-                    trading_date=bar_date,
-                    real_buy_count=int(inst_rng.uniform(400, 3500)),
-                    real_buy_volume=int(vol * r_buy_ratio),
-                    real_buy_value=r_buy_val,
-                    legal_buy_count=int(inst_rng.uniform(2, 25)),
-                    legal_buy_volume=int(vol * (1 - r_buy_ratio)),
-                    legal_buy_value=l_buy_val,
-                    real_sell_count=int(inst_rng.uniform(350, 3000)),
-                    real_sell_volume=int(vol * 0.7),
-                    real_sell_value=r_sell_val,
-                    legal_sell_count=int(inst_rng.uniform(2, 20)),
-                    legal_sell_volume=int(vol * 0.3),
-                    legal_sell_value=l_sell_val,
+                    trading_date=ct_date,
+                    real_buy_count=ct_item["real_buy_count"],
+                    real_buy_volume=ct_item["real_buy_volume"],
+                    real_buy_value=ct_item["real_buy_value"],
+                    real_sell_count=ct_item["real_sell_count"],
+                    real_sell_volume=ct_item["real_sell_volume"],
+                    real_sell_value=ct_item["real_sell_value"],
+                    legal_buy_count=ct_item["legal_buy_count"],
+                    legal_buy_volume=ct_item["legal_buy_volume"],
+                    legal_buy_value=ct_item["legal_buy_value"],
+                    legal_sell_count=ct_item["legal_sell_count"],
+                    legal_sell_volume=ct_item["legal_sell_volume"],
+                    legal_sell_value=ct_item["legal_sell_value"],
                 )
                 db.add(ct)
 
@@ -179,14 +152,14 @@ def reset_and_seed_market():
         # 6. Seed Realistic Diversified Active Positions for 1 Billion Toman Portfolio
         logger.info("📈 Seeding active open positions with real TSE prices...")
         active_positions_spec = [
-            {"symbol": "فولاد", "qty": 150_000, "price": 5240.0, "target": 5750.0, "stop": 4980.0, "regime": "risk_on"},
-            {"symbol": "فملی", "qty": 110_000, "price": 7080.0, "target": 7780.0, "stop": 6720.0, "regime": "risk_on"},
-            {"symbol": "نوری", "qty": 35_000, "price": 24350.0, "target": 26900.0, "stop": 23100.0, "regime": "risk_on"},
-            {"symbol": "وبملت", "qty": 350_000, "price": 2450.0, "target": 2720.0, "stop": 2320.0, "regime": "risk_on"},
-            {"symbol": "شپنا", "qty": 180_000, "price": 4600.0, "target": 5050.0, "stop": 4370.0, "regime": "risk_on"},
-            {"symbol": "کچاد", "qty": 180_000, "price": 4380.0, "target": 4800.0, "stop": 4150.0, "regime": "risk_on"},
-            {"symbol": "کگل", "qty": 130_000, "price": 6280.0, "target": 6900.0, "stop": 5960.0, "regime": "risk_on"},
-            {"symbol": "وغدیر", "qty": 45_000, "price": 18200.0, "target": 20100.0, "stop": 17250.0, "regime": "risk_on"},
+            {"symbol": "فولاد", "qty": 300_000, "price": 2785.0, "target": 3060.0, "stop": 2640.0, "regime": "risk_on"},
+            {"symbol": "شاوان", "qty": 50_000, "price": 26340.0, "target": 28970.0, "stop": 25020.0, "regime": "risk_on"},
+            {"symbol": "نوری", "qty": 35_000, "price": 35740.0, "target": 39300.0, "stop": 33950.0, "regime": "risk_on"},
+            {"symbol": "وبملت", "qty": 500_000, "price": 1291.0, "target": 1420.0, "stop": 1220.0, "regime": "risk_on"},
+            {"symbol": "وتجارت", "qty": 600_000, "price": 774.0, "target": 850.0, "stop": 735.0, "regime": "risk_on"},
+            {"symbol": "شپنا", "qty": 200_000, "price": 4150.0, "target": 4560.0, "stop": 3940.0, "regime": "risk_on"},
+            {"symbol": "کگل", "qty": 130_000, "price": 6850.0, "target": 7530.0, "stop": 6500.0, "regime": "risk_on"},
+            {"symbol": "وغدیر", "qty": 45_000, "price": 22400.0, "target": 24640.0, "stop": 21280.0, "regime": "risk_on"},
         ]
 
         total_cost = 0.0
