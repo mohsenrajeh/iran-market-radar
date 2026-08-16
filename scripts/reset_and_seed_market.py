@@ -154,6 +154,7 @@ def reset_and_seed_market():
         active_positions_spec = [
             {"symbol": "فولاد", "qty": 300_000, "price": 2785.0, "target": 3060.0, "stop": 2640.0, "regime": "risk_on"},
             {"symbol": "شاوان", "qty": 50_000, "price": 26340.0, "target": 28970.0, "stop": 25020.0, "regime": "risk_on"},
+            {"symbol": "خبهمن", "qty": 400_000, "price": 2415.0, "target": 2650.0, "stop": 2290.0, "regime": "risk_on"},
             {"symbol": "نوری", "qty": 35_000, "price": 35740.0, "target": 39300.0, "stop": 33950.0, "regime": "risk_on"},
             {"symbol": "وبملت", "qty": 500_000, "price": 1291.0, "target": 1420.0, "stop": 1220.0, "regime": "risk_on"},
             {"symbol": "وتجارت", "qty": 600_000, "price": 774.0, "target": 850.0, "stop": 735.0, "regime": "risk_on"},

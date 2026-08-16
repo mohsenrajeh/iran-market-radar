@@ -60,7 +60,7 @@ FIXTURE_INSTRUMENTS = [
     {"ticker": "خپارس", "name_fa": "پارس خودرو", "isin": "IRO1PKHD0001", "sector_code": "44", "base_price": 990.0, "volatility": 0.030},
     {"ticker": "خزامیا", "name_fa": "زامیاد", "isin": "IRO1ZAMD0001", "sector_code": "44", "base_price": 5950.0, "volatility": 0.029},
     {"ticker": "خگستر", "name_fa": "گسترش سرمایه گذاری ایران خودرو", "isin": "IRO1GIKC0001", "sector_code": "44", "base_price": 4020.0, "volatility": 0.028},
-    {"ticker": "خبهمن", "name_fa": "گروه بهمن", "isin": "IRO1BAHM0001", "sector_code": "44", "base_price": 3250.0, "volatility": 0.025},
+    {"ticker": "خبهمن", "name_fa": "گروه بهمن", "isin": "IRO1BAHM0001", "sector_code": "44", "base_price": 2415.0, "volatility": 0.025},
 
     # بانک‌ها و مؤسسات اعتباری
     {"ticker": "وبملت", "name_fa": "بانک ملت", "isin": "IRO1BMLT0001", "sector_code": "39", "base_price": 1291.0, "volatility": 0.016},
