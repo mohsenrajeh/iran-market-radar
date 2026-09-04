@@ -25,8 +25,14 @@ function Invoke-Git {
     )
 
     if ($Capture) {
-        $output = @(& git -c core.safecrlf=false -c core.quotePath=false -C $script:ResolvedRepoRoot @Arguments 2>&1)
-        $exitCode = $LASTEXITCODE
+        $previousErrorActionPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = 'Continue'
+            $output = @(& git -c core.safecrlf=false -c core.quotePath=false -C $script:ResolvedRepoRoot @Arguments 2>&1)
+            $exitCode = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
         if (-not $AllowFailure -and $exitCode -ne 0) {
             throw "git $($Arguments -join ' ') failed: $($output -join [Environment]::NewLine)"
         }
@@ -58,6 +64,44 @@ function Test-SensitivePath {
     if ($leaf -in @('.server.known_hosts', 'known_hosts')) { return $false }
 
     return $normalized -match '(?i)(^|/)(\.env($|\.)|\.server\.local\.env$|credentials?($|\.)|secrets?($|\.)|id_(rsa|ed25519)$|[^/]+\.(pem|key|p12|pfx|kdbx|tfstate|dump|sql|sql\.gz|sqlite|sqlite3|db)$)'
+}
+
+function Assert-RemoteRepository {
+    param(
+        [string]$Remote,
+        [string]$Repository,
+        [ValidateSet('github', 'gitea')]
+        [string]$Provider
+    )
+
+    $remoteUrl = ((Invoke-Git -Arguments @('config', '--get', "remote.$Remote.url") -Capture).Output -join '').Trim()
+    $expectedSuffix = $Repository.Trim('/') + '.git'
+    if (-not $remoteUrl.TrimEnd('/').EndsWith($expectedSuffix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Remote '$Remote' does not point to the approved repository '$Repository'."
+    }
+    if ($Provider -eq 'github' -and $remoteUrl -notmatch '(?i)github\.com[:/]') {
+        throw "Primary remote '$Remote' is not a GitHub remote."
+    }
+    if ($Provider -eq 'gitea' -and $remoteUrl -notmatch '(?i)(gitea-iran|193\.242\.125\.76)[:/]') {
+        throw "Fallback remote '$Remote' is not the approved Iran Gitea host."
+    }
+}
+
+function Assert-HeadCompatibleWithRemote {
+    param([string]$Remote)
+
+    $remoteRef = "$Remote/$($config.productionBranch)"
+    $remoteExists = Invoke-Git -Arguments @('rev-parse', '--verify', '--quiet', $remoteRef) -AllowFailure
+    if ($remoteExists -ne 0) { return }
+
+    $headIsAncestor = Invoke-Git -Arguments @('merge-base', '--is-ancestor', 'HEAD', $remoteRef) -AllowFailure
+    $remoteIsAncestor = Invoke-Git -Arguments @('merge-base', '--is-ancestor', $remoteRef, 'HEAD') -AllowFailure
+    if ($headIsAncestor -eq 0 -and $remoteIsAncestor -ne 0) {
+        throw "Local branch is behind $remoteRef. Pull/rebase intentionally before releasing."
+    }
+    if ($headIsAncestor -ne 0 -and $remoteIsAncestor -ne 0) {
+        throw "Local and $remoteRef have diverged. Automatic merge and force-push are forbidden."
+    }
 }
 
 function Assert-NoHighConfidenceSecret {
@@ -142,25 +186,37 @@ if ($branch -ne [string]$config.productionBranch) {
     throw "Current branch '$branch' is not the production branch '$($config.productionBranch)'."
 }
 
-$remoteUrl = ((Invoke-Git -Arguments @('config', '--get', "remote.$($config.remote).url") -Capture).Output -join '').Trim()
-$expectedSuffix = ([string]$config.repository).Trim('/') + '.git'
-if ($remoteUrl -notmatch '(?i)github\.com[:/]' -or -not $remoteUrl.TrimEnd('/').EndsWith($expectedSuffix, [StringComparison]::OrdinalIgnoreCase)) {
-    throw "Remote '$($config.remote)' does not point to the approved GitHub repository '$($config.repository)'."
+Assert-RemoteRepository -Remote ([string]$config.remote) -Repository ([string]$config.repository) -Provider github
+$hasFallback = $config.PSObject.Properties.Name.Contains('fallbackRemote') -and -not [string]::IsNullOrWhiteSpace([string]$config.fallbackRemote)
+if ($hasFallback) {
+    if (-not $config.PSObject.Properties.Name.Contains('fallbackRepository') -or [string]::IsNullOrWhiteSpace([string]$config.fallbackRepository)) {
+        throw 'fallbackRepository is required when fallbackRemote is configured.'
+    }
+    Assert-RemoteRepository -Remote ([string]$config.fallbackRemote) -Repository ([string]$config.fallbackRepository) -Provider gitea
 }
 
-Write-Host "`n[1/6] Fetching approved production remote..." -ForegroundColor Cyan
-Invoke-Git -Arguments @('fetch', [string]$config.remote, [string]$config.productionBranch, '--quiet') | Out-Null
-$remoteRef = "$($config.remote)/$($config.productionBranch)"
-$remoteExists = Invoke-Git -Arguments @('rev-parse', '--verify', '--quiet', $remoteRef) -AllowFailure
-if ($remoteExists -eq 0) {
-    $isBehind = Invoke-Git -Arguments @('merge-base', '--is-ancestor', 'HEAD', $remoteRef) -AllowFailure
-    $remoteIsAncestor = Invoke-Git -Arguments @('merge-base', '--is-ancestor', $remoteRef, 'HEAD') -AllowFailure
-    if ($isBehind -eq 0 -and $remoteIsAncestor -ne 0) {
-        throw "Local branch is behind $remoteRef. Pull/rebase intentionally before releasing."
+Write-Host "`n[1/6] Fetching approved production source(s)..." -ForegroundColor Cyan
+$primaryFetch = Invoke-Git -Arguments @('fetch', [string]$config.remote, [string]$config.productionBranch, '--quiet') -Capture -AllowFailure
+$usingFallback = $false
+if ($primaryFetch.ExitCode -eq 0) {
+    Assert-HeadCompatibleWithRemote -Remote ([string]$config.remote)
+    if ($hasFallback) {
+        $fallbackFetch = Invoke-Git -Arguments @('fetch', [string]$config.fallbackRemote, [string]$config.productionBranch, '--quiet') -Capture -AllowFailure
+        if ($fallbackFetch.ExitCode -ne 0) {
+            throw "GitHub is reachable, but the required Iran Gitea mirror could not be fetched. No release was created."
+        }
+        Assert-HeadCompatibleWithRemote -Remote ([string]$config.fallbackRemote)
     }
-    if ($isBehind -ne 0 -and $remoteIsAncestor -ne 0) {
-        throw "Local and $remoteRef have diverged. Automatic merge and force-push are forbidden."
+} elseif ($hasFallback) {
+    Write-Host 'GitHub is unavailable; switching this release to the approved Iran Gitea fallback.' -ForegroundColor DarkYellow
+    $fallbackFetch = Invoke-Git -Arguments @('fetch', [string]$config.fallbackRemote, [string]$config.productionBranch, '--quiet') -Capture -AllowFailure
+    if ($fallbackFetch.ExitCode -ne 0) {
+        throw 'Neither GitHub nor the approved Iran Gitea fallback is reachable. Nothing was committed or pushed.'
     }
+    Assert-HeadCompatibleWithRemote -Remote ([string]$config.fallbackRemote)
+    $usingFallback = $true
+} else {
+    throw "GitHub fetch failed and this project has no configured fallback remote. Nothing was committed or pushed."
 }
 
 $excludePatterns = @($config.excludePaths)
@@ -232,7 +288,18 @@ try {
     }
 
     Write-Host "`n[6/6] Pushing without force..." -ForegroundColor Cyan
-    Invoke-Git -Arguments @('push', [string]$config.remote, "HEAD:refs/heads/$($config.productionBranch)") | Out-Null
+    if ($usingFallback) {
+        Invoke-Git -Arguments @('push', [string]$config.fallbackRemote, "HEAD:refs/heads/$($config.productionBranch)") | Out-Null
+    } else {
+        Invoke-Git -Arguments @('push', [string]$config.remote, "HEAD:refs/heads/$($config.productionBranch)") | Out-Null
+        if ($hasFallback) {
+            try {
+                Invoke-Git -Arguments @('push', [string]$config.fallbackRemote, "HEAD:refs/heads/$($config.productionBranch)") | Out-Null
+            } catch {
+                throw "GitHub push succeeded, but the Iran Gitea mirror push failed. Commit $((Invoke-Git -Arguments @('rev-parse', 'HEAD') -Capture).Output -join '') is safe on GitHub; repair the mirror before the next Iran deployment. $($_.Exception.Message)"
+            }
+        }
+    }
 } catch {
     if ($stagedByScript -and $candidates.Selected.Count -gt 0) {
         & git -C $script:ResolvedRepoRoot restore --staged -- $candidates.Selected 2>$null
@@ -245,4 +312,11 @@ Write-Host "`nPUSH SUCCEEDED" -ForegroundColor Green
 Write-Host "Repository: $($config.repository)"
 Write-Host "Branch:     $($config.productionBranch)"
 Write-Host "Commit:     $sha"
-Write-Host 'GitHub checks and the deployment gate now control production promotion.'
+if ($usingFallback) {
+    Write-Host 'Source:     Iran Gitea fallback (GitHub was unavailable)'
+} elseif ($hasFallback) {
+    Write-Host 'Source:     GitHub primary + Iran Gitea mirror'
+} else {
+    Write-Host 'Source:     GitHub primary'
+}
+Write-Host 'Checks and the deployment gate now control production promotion.'
