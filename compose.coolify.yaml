@@ -1,0 +1,84 @@
+x-api-environment: &api-environment
+  APP_ENV: production
+  APP_PORT: "8742"
+  AUTO_PAPER_TRADING_ENABLED: "${AUTO_PAPER_TRADING_ENABLED:-false}"
+  COOKIE_SECURE: "true"
+  CORS_ORIGINS: "${CORS_ORIGINS}"
+  DATABASE_SYNC_URL: "${DATABASE_SYNC_URL}"
+  DATABASE_URL: "${DATABASE_URL}"
+  DATA_HTTP_PROXY: "${DATA_HTTP_PROXY:-}"
+  DATA_HTTP_TRUST_ENV: "${DATA_HTTP_TRUST_ENV:-false}"
+  HISTORY_BACKFILL_ENABLED: "${HISTORY_BACKFILL_ENABLED:-false}"
+  HISTORY_BACKFILL_INTERVAL_SECONDS: "${HISTORY_BACKFILL_INTERVAL_SECONDS:-3600}"
+  INITIAL_PORTFOLIO_CASH_RIALS: "${INITIAL_PORTFOLIO_CASH_RIALS:-100000000000}"
+  LIVE_TRADING_ENABLED: "false"
+  LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+  MARKET_DATA_MODE: "${MARKET_DATA_MODE:-live}"
+  MARKET_DATA_SCHEDULER_ENABLED: "${MARKET_DATA_SCHEDULER_ENABLED:-true}"
+  MINIMUM_FUNDAMENTAL_SOURCES: "${MINIMUM_FUNDAMENTAL_SOURCES:-2}"
+  RADAR_ADMIN_PASSWORD: "${RADAR_ADMIN_PASSWORD}"
+  RADAR_ADMIN_USER: "${RADAR_ADMIN_USER}"
+  REDIS_URL: "${REDIS_URL}"
+  RISK_KILL_SWITCH_ARMED: "false"
+  SESSION_SECRET: "${SESSION_SECRET}"
+  SESSION_TTL_MINUTES: "${SESSION_TTL_MINUTES:-480}"
+  TRADING_MODE: paper
+  TSETMC_BLOCK_COOLDOWN_SECONDS: "${TSETMC_BLOCK_COOLDOWN_SECONDS:-1800}"
+  TSETMC_MARKET_HOURS_ENFORCED: "${TSETMC_MARKET_HOURS_ENFORCED:-true}"
+  TSETMC_NETWORK_COOLDOWN_SECONDS: "${TSETMC_NETWORK_COOLDOWN_SECONDS:-300}"
+  BROKER_ADAPTER: ""
+  BROKER_CREDENTIALS: ""
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: infra/docker/Dockerfile.api
+    restart: unless-stopped
+    environment: *api-environment
+    ports:
+      - "127.0.0.1:62032:8742"
+    networks:
+      production:
+        aliases:
+          - radar-api-coolify
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail --max-time 3 http://127.0.0.1:8742/api/v1/health >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  web:
+    build:
+      context: .
+      dockerfile: infra/docker/Dockerfile.web
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      PORT: "3000"
+      HOSTNAME: 0.0.0.0
+      API_INTERNAL_URL: "http://radar-api-coolify:8742/api/v1/:path*"
+    ports:
+      - "127.0.0.1:62031:3000"
+    networks:
+      production:
+        aliases:
+          - radar-web-coolify
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"fetch('http://127.0.0.1:3000/').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))\"",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+networks:
+  production:
+    external: true
+    name: iran-market-radar-prod_default
