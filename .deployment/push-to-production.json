@@ -1,0 +1,27 @@
+{
+  "productionBranch": "main",
+  "remote": "origin",
+  "repository": "mohsenrajeh/iran-market-radar",
+  "excludePaths": [
+    "output/*",
+    "artifacts/*",
+    ".playwright-cli/*"
+  ],
+  "tests": [
+    {
+      "name": "Python tests",
+      "workingDirectory": ".",
+      "command": "py -3.11 -m pytest tests/ -q"
+    },
+    {
+      "name": "Web typecheck and build",
+      "workingDirectory": "apps/web",
+      "command": "node node_modules/typescript/bin/tsc --noEmit -p tsconfig.json && npm.cmd run build"
+    },
+    {
+      "name": "Compose validation",
+      "workingDirectory": ".",
+      "command": "docker compose config --quiet"
+    }
+  ]
+}
