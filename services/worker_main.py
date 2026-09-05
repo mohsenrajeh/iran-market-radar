@@ -5,7 +5,6 @@ import asyncio
 import signal
 
 from packages.shared.config import settings
-from packages.shared.database import init_db_sync
 from packages.shared.logger import logger
 from services.collector.backfill_worker import (
     is_history_backfill_running,
@@ -30,7 +29,6 @@ async def _wait_for_shutdown() -> None:
 async def run_workers() -> None:
     """Start the single background-worker owner and stop it gracefully."""
     settings.validate_runtime_security()
-    init_db_sync()
     try:
         await start_auto_trading_scheduler()
         await start_history_backfill_worker()

@@ -20,6 +20,8 @@ from apps.api.routes.history import router as history_router
 from apps.api.routes.learning import router as learning_router
 from apps.api.routes.market_stream import router as market_stream_router
 from services.collector.service import IngestionCoordinator
+from services.paper_broker.scheduler import start_auto_trading_scheduler, stop_auto_trading_scheduler
+from services.collector.backfill_worker import start_history_backfill_worker, stop_history_backfill_worker
 from packages.shared.config import settings
 from packages.shared.database import init_db_sync, SyncSessionLocal
 from packages.shared.logger import logger
@@ -30,19 +32,34 @@ async def lifespan(app: FastAPI):
     """Lifespan event handler for startup data bootstrapping."""
     settings.validate_runtime_security()
     logger.info("Initializing Iran Market Radar database and models...")
-    init_db_sync()
+    if settings.database_startup_init_enabled:
+        init_db_sync()
 
     db = SyncSessionLocal()
     try:
         coordinator = IngestionCoordinator(db)
-        await coordinator.bootstrap_if_empty(history_days=260)
+        if settings.database_startup_init_enabled:
+            await coordinator.bootstrap_if_empty(history_days=260)
         logger.info("Iran Market Radar initialized; an explicit paper campaign is required for trading.")
     except Exception as ex:
         logger.error(f"Error during bootstrapping: {ex}", exc_info=True)
     finally:
         db.close()
 
+    try:
+        await start_auto_trading_scheduler()
+        await start_history_backfill_worker()
+        logger.info(
+            "API worker configuration: market_scheduler=%s history_backfill=%s",
+            settings.market_data_scheduler_enabled,
+            settings.history_backfill_enabled,
+        )
+    except Exception as ex:
+        logger.error(f"Failed to start market-data scheduler: {ex}", exc_info=True)
+
     yield
+    await stop_auto_trading_scheduler()
+    await stop_history_backfill_worker()
     logger.info("Shutting down Iran Market Radar API server.")
 
 

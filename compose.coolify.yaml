@@ -6,6 +6,7 @@ x-api-environment: &api-environment
   CORS_ORIGINS: "${CORS_ORIGINS}"
   DATABASE_SYNC_URL: "${DATABASE_SYNC_URL}"
   DATABASE_URL: "${DATABASE_URL}"
+  DATABASE_STARTUP_INIT_ENABLED: "false"
   DATA_HTTP_PROXY: "${DATA_HTTP_PROXY:-}"
   DATA_HTTP_TRUST_ENV: "${DATA_HTTP_TRUST_ENV:-false}"
   HISTORY_BACKFILL_ENABLED: "${HISTORY_BACKFILL_ENABLED:-false}"
@@ -35,7 +36,11 @@ services:
       context: .
       dockerfile: infra/docker/Dockerfile.api.coolify
     restart: unless-stopped
-    environment: *api-environment
+    environment:
+      <<: *api-environment
+      AUTO_PAPER_TRADING_ENABLED: "false"
+      HISTORY_BACKFILL_ENABLED: "false"
+      MARKET_DATA_SCHEDULER_ENABLED: "false"
     ports:
       - "127.0.0.1:62032:8742"
     networks:
@@ -83,6 +88,9 @@ services:
       context: .
       dockerfile: infra/docker/Dockerfile.api.coolify
     restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
     environment:
       <<: *api-environment
       AUTO_PAPER_TRADING_ENABLED: "${WORKER_AUTO_PAPER_TRADING_ENABLED:-false}"

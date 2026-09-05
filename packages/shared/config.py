@@ -172,6 +172,7 @@ class Settings(BaseSettings):
     data_http_trust_env: bool = Field(default=False, alias="DATA_HTTP_TRUST_ENV")
 
     # Data provenance and automated paper-trading controls
+    database_startup_init_enabled: bool = Field(default=True, alias="DATABASE_STARTUP_INIT_ENABLED")
     market_data_mode: str = Field(default="official", alias="MARKET_DATA_MODE")
     auto_paper_trading_enabled: bool = Field(default=False, alias="AUTO_PAPER_TRADING_ENABLED")
     market_data_scheduler_enabled: bool = Field(default=True, alias="MARKET_DATA_SCHEDULER_ENABLED")
