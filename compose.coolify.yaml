@@ -33,7 +33,7 @@ services:
   api:
     build:
       context: .
-      dockerfile: infra/docker/Dockerfile.api
+      dockerfile: infra/docker/Dockerfile.api.coolify
     restart: unless-stopped
     environment: *api-environment
     ports:
@@ -52,7 +52,7 @@ services:
   web:
     build:
       context: .
-      dockerfile: infra/docker/Dockerfile.web
+      dockerfile: infra/docker/Dockerfile.web.coolify
     restart: unless-stopped
     depends_on:
       api:

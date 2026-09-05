@@ -1,0 +1,14 @@
+ARG BASE_IMAGE=127.0.0.1:5000/iran-market-radar/web-base@sha256:70dd5451dfa2b0572a55d7a6d925dd9fee570e445646578c36a5777ce292fd07
+FROM ${BASE_IMAGE}
+
+WORKDIR /app
+COPY apps/web/package*.json ./
+COPY apps/web ./
+RUN npm run build
+
+ENV NODE_ENV=production \
+    PORT=3000 \
+    HOSTNAME=0.0.0.0
+
+EXPOSE 3000
+CMD ["npx", "next", "start", "-H", "0.0.0.0", "-p", "3000"]
