@@ -453,3 +453,8 @@ async def stop_history_backfill_worker():
     if _task:
         _task.cancel()
         _task = None
+
+
+def is_history_backfill_running() -> bool:
+    """Return whether this process currently owns the history worker."""
+    return _running

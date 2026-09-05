@@ -20,8 +20,6 @@ from apps.api.routes.history import router as history_router
 from apps.api.routes.learning import router as learning_router
 from apps.api.routes.market_stream import router as market_stream_router
 from services.collector.service import IngestionCoordinator
-from services.paper_broker.scheduler import start_auto_trading_scheduler, stop_auto_trading_scheduler
-from services.collector.backfill_worker import start_history_backfill_worker, stop_history_backfill_worker
 from packages.shared.config import settings
 from packages.shared.database import init_db_sync, SyncSessionLocal
 from packages.shared.logger import logger
@@ -44,18 +42,7 @@ async def lifespan(app: FastAPI):
     finally:
         db.close()
 
-    try:
-        await start_auto_trading_scheduler()
-        await start_history_backfill_worker()
-        logger.info("Market-data scheduler activated; paper execution uses its independent safety flag.")
-    except Exception as ex:
-        logger.error(f"Failed to start market-data scheduler: {ex}", exc_info=True)
-
     yield
-
-    # Shutdown scheduler gracefully
-    await stop_auto_trading_scheduler()
-    await stop_history_backfill_worker()
     logger.info("Shutting down Iran Market Radar API server.")
 
 

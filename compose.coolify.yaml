@@ -78,6 +78,28 @@ services:
       retries: 5
       start_period: 30s
 
+  worker:
+    build:
+      context: .
+      dockerfile: infra/docker/Dockerfile.api.coolify
+    restart: unless-stopped
+    environment:
+      <<: *api-environment
+      AUTO_PAPER_TRADING_ENABLED: "${WORKER_AUTO_PAPER_TRADING_ENABLED:-false}"
+      HISTORY_BACKFILL_ENABLED: "${WORKER_HISTORY_BACKFILL_ENABLED:-false}"
+      MARKET_DATA_SCHEDULER_ENABLED: "${WORKER_MARKET_DATA_SCHEDULER_ENABLED:-false}"
+    command: ["python", "-m", "services.worker_main"]
+    networks:
+      production:
+        aliases:
+          - radar-worker-coolify
+    healthcheck:
+      test: ["CMD-SHELL", "kill -0 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
 networks:
   production:
     external: true
