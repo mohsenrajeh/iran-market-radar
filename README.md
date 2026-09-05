@@ -1,117 +1,111 @@
-# Iran Market Radar (رادار هوشمند بازار سرمایه ایران)
+# Iran Market Radar — رادار بازار سرمایه ایران
 
-[![Python 3.11](https://img.shields.io/badge/Python-3.11-blue.svg)](https://www.python.org/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-009688.svg)](https://fastapi.tiangolo.com/)
-[![Next.js 14](https://img.shields.io/badge/Next.js-14.1-black.svg)](https://nextjs.org/)
-[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-336791.svg)](https://www.postgresql.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+سامانه پژوهش کمّی، اسکن فرصت و معاملات کاغذی برای بورس و فرابورس ایران. فاز فعلی فقط **تحلیل و Paper Trading** است؛ هیچ سفارش واقعی به کارگزاری ارسال نمی‌شود.
 
-> Institutional-grade algorithmic market scanner, quantitative research lab, and automated paper trading workstation tailored specifically for the Tehran Stock Exchange (TSE / IFB).
+## وضعیت عملیاتی
 
----
+- سرمایه کمپین فعال: ۱۰ میلیارد تومان (۱۰۰ میلیارد ریال).
+- جلسه پیوسته بازار: ۰۹:۰۰ تا ۱۲:۳۰ به وقت تهران.
+- چرخه جمع‌آوری داده همیشه روشن است: در بازار هر ۶۰ ثانیه و خارج بازار با cadence تطبیقی. اجرای کاغذی فقط وقتی تمام گیت‌ها سالم باشند فعال می‌شود.
+- داده fixture از کمپین فعال قرنطینه شده است.
+- نبود قیمت، timestamp، دامنه مجاز، کالیبراسیون خارج از نمونه یا دو منبع بنیادی مستقل، سفارش جدید را مسدود می‌کند.
+- تنها منبع بازار فعال، JSON عمومی `cdn.tsetmc.com` است؛ هیچ fallback مخفی یا credential بازار وجود ندارد.
+- هیچ قیمت نمونه یا نتیجه تاریخی ساختگی نباید در UI یا API به‌عنوان داده واقعی نمایش داده شود.
 
-## 🌟 Key Capabilities
+در آزمون زنده ۲۰۲۶-۰۸-۱۸، CDN رسمی بدون credential، ۳۳۴۹ ردیف خام و ۹۶۸ ورقه بورس/فرابورس برگرداند. ۸۷۲ ردیف دارای فیلد کامل جلسه به provenance مستقیم متصل شدند. نبود تاریخچه کامل، دو upstream بنیادی مستقل و calibrator همچنان خرید را fail-closed نگه می‌دارد.
 
-1. **12 Quantitative Trading Strategies (`packages/strategies/`):**
-   - Momentum & Trend-Following (EMA Multi-Ribbon + Breakout)
-   - Mean Reversion (RSI 14 + Lower Bollinger Band bounce)
-   - Smart Money Flow (Real vs Legal Buyer Power Ratio + Net Inflow)
-   - 20-Day Range Breakout + Volume Z-Score Anomaly
-   - Fundamental Growth & Value (P/E & P/S discount + Codal quarterly growth)
-   - Sector Rotation & Relative Strength
-   - Multi-Timeframe Trend Confirmation
-   - Ichimoku Cloud Kumo Breakout (Tenkan/Kijun cross above cloud)
-   - Volatility Squeeze (Bollinger inside Keltner Channels)
-   - BBSqueeze Explosion Breakout
-   - Multi-Indicator Confluence (5 of 8 bullish agreement)
-   - Smart Money Divergence (Price decline vs smart money accumulation)
+## گیت صدور سیگنال قابل اقدام
 
-2. **Accurate Iranian Market Data & Point-in-Time Discipline:**
-   - Real-world TSE prices (e.g., Shabriz 43,240 Rials, Foulad 2,785 Rials, Webmellat 1,291 Rials).
-   - Real-time Codal announcement classification (Positive disclosure, revenue surge).
-   - TSETMC microstructure: Orderbook top 5 levels, buy/sell per-capita power, daily ±5% limits.
-   - Exact 1.2562% round-trip exchange fees and tax deduction calculations.
+یک سیگنال تنها وقتی قابل اقدام است که همه شروط زیر هم‌زمان برقرار باشند:
 
-3. **100% Offline Persian RTL Typography & Design System:**
-   - Built with local **Vazirmatn (وزیرمتن)** fonts (WOFF2) with zero external Google Fonts network dependencies.
-   - Unicode Left-to-Right Mark (`\u200E`) isolation to prevent inverted parentheses and percentages in Persian RTL.
-   - Professional institutional slate dark theme with SVG candlestick charts, overlay targets, stop loss levels, and client power meters.
+1. حداقل سه خانواده تکنیکال مستقل و چهار رأی صعودی واجد حدنصاب؛
+2. دو منبع بنیادی سالم با upstream مستقل؛
+3. snapshot رسمی تازه با timestamp منبع و دامنه مجاز واقعی؛
+4. حداقل ۲۶۰ جلسه تاریخچه و کیفیت داده اندازه‌گیری‌شده؛
+5. مدل احتمال سود برازش‌شده روی داده خارج از نمونه؛
+6. نقدشوندگی، محدودیت صنعت، سقف موقعیت و بودجه ریسک مطابق سیاست مرکزی؛
+7. اجرای کاغذی فقط روی اولین snapshot رسمی بعد از زمان ثبت سفارش.
 
-4. **13 Complete Workstation Views:**
-   - Main 360 Market Dashboard
-   - Quantitative Opportunity Scanner (4-column grid with entry/target/stop-loss)
-   - 360 Symbol Modal (Interactive SVG Candlestick Chart, Indicators, Orderbook, Codal)
-   - Open Positions & 1 Billion Toman Portfolio Workstation
-   - Closed Trades Ledger & Accounting (Double-entry reconciliation)
-   - Trade Autopsy & Multi-Factor Drawer
-   - Fundamental Valuation & Piotroski F-Score Matrix
-   - Real-Time Codal Announcements Feed
-   - Trading Lab & Strategy Health Matrix (Mathematical Expectancy `+0.42R`, Win Rate, Calibrated Probabilities)
-   - Structured Post-Trade Lessons & Rule Extraction
-   - Research Queue (Champion vs Challenger Strategy Evaluation)
-   - Data Pipeline Health, Risk Policies & Fee Breakdown
+۱۲ موتور موجود در `packages/strategies/` شامل momentum، trend، breakout، pullback، mean reversion، volume anomaly، client flow، Ichimoku، sector rotation، BB squeeze، confluence و smart-money divergence هستند. تعداد رأی به‌تنهایی کافی نیست؛ رأی‌های هم‌بسته یک خانواده مستقل محسوب نمی‌شوند.
 
----
+## ثبت و حسابرسی معاملات
 
-## 🚀 Quick Start with Docker
+برای خرید، افزایش، کاهش و فروش موارد زیر نگهداری می‌شود:
 
-```bash
-# 1. Clone repository
-git clone https://github.com/mohsenrajeh/iran-market-radar.git
-cd iran-market-radar
+- شناسه سیگنال، تصمیم، سفارش و fill؛
+- نسخه مدل، نسخه استراتژی، سیاست ریسک و snapshot مبنا؛
+- دلیل فارسی و اجزای ماشینی تصمیم؛
+- قیمت برنامه‌ریزی‌شده و قیمت واقعی شبیه‌سازی‌شده پس از صف/اسلیپیج؛
+- کارمزد و مالیات، NAV ورود و خروج، وزن موقعیت، MFE، MAE و R تحقق‌یافته؛
+- timeline کامل ورود، scale-in، trim و خروج نهایی.
 
-# 2. Copy environment template
-cp .env.example .env
+## راه‌اندازی محلی
 
-# 3. Bootstrap all services with Docker Compose
+```powershell
+Copy-Item .env.example .env
 docker compose up -d --build
 ```
 
-### 🌐 Access Endpoints
-- **Web Application (Persian RTL):** [http://127.0.0.1:3742](http://127.0.0.1:3742)
-- **REST API & Swagger Docs:** [http://127.0.0.1:8742/docs](http://127.0.0.1:8742/docs)
-- **PostgreSQL Database:** `127.0.0.1:5742`
-- **Redis Cache:** `127.0.0.1:6742`
+آدرس‌ها:
 
----
+- وب: [http://127.0.0.1:3742](http://127.0.0.1:3742)
+- API: [http://127.0.0.1:8742/docs](http://127.0.0.1:8742/docs)
+- PostgreSQL: `127.0.0.1:5742`
+- Redis: `127.0.0.1:6742`
 
-## 🏗 Repository Architecture
+credentialها فقط در `.env` محلی قرار می‌گیرند و نباید commit، log یا در UI نمایش داده شوند.
+این Docker Compose فقط روی loopback و HTTP اجرا می‌شود و بنابراین `COOKIE_SECURE=false` را به API محلی تحمیل می‌کند؛ در استقرار HTTPS عمومی باید این مقدار حتماً `true` باشد.
 
-```text
-apps/
-  api/                     # FastAPI backend (ports: 8742)
-  web/                     # Next.js 14 frontend (ports: 3742)
-services/
-  collector/               # Market data synchronization & radar scanning
-  paper_broker/            # Automated paper trading & hourly auto-trader
-  scorer/                  # Signal aggregation & probability calibration
-packages/
-  domain/                  # SQLAlchemy 2.0 models & Pydantic v2 schemas
-  feature_engine/          # 20+ technical indicators & regime classifiers
-  strategies/              # 12 quantitative trading strategy implementations
-  market_rules/            # TSE fees, price limits, tick sizes
-  data_adapters/           # TSETMC, Sahamyab, Codal, and Fixture adapters
-  ml/                      # Isotonic calibration & ensemble scoring
-  shared/                  # Config, logging, database session management
-screenshots/               # 13 high-resolution visual verification captures
+### عیب‌یابی منبع داده و VPN
+
+```powershell
+py -3.11 tools/probe_data_providers.py
 ```
 
----
+این probe secretها را چاپ نمی‌کند. `DATA_HTTP_TRUST_ENV=false` جلوی ارث‌بری proxyهای محیطی خراب را می‌گیرد. اگر VPN یک HTTP proxy واقعی دارد، آن را فقط در `DATA_HTTP_PROXY` تنظیم کنید؛ در حالت TUN/split-tunnel باید `python.exe` و Docker در برنامه VPN مجاز شوند.
 
-## 📋 Quality Gates & Verification
+جزئیات منابع و fallbackها: [docs/24_DATA_PROVIDER_CONTRACT.md](docs/24_DATA_PROVIDER_CONTRACT.md).
 
-Before approving code, ensure all pre-flight checks pass:
-```bash
-# Run backend unit tests
-pytest tests/ -v
+## یادگیری کنترل‌شده
 
-# Capture and verify all 13 viewports visually
+سیستم پس از هر معامله post-mortem و داده قابل‌ردیابی ثبت می‌کند، اما با یک زیان پارامتر production را تغییر نمی‌دهد. ساخت کاندید تنها پس از حداقل ۵۰ معامله train و ۲۰ معامله بعدی OOS در دست‌کم دو رژیم بازار مجاز است. نسخه فقط وقتی قابل فعال‌سازی است که Brier در قطعه زمانی OOS بهتر شود؛ فعال‌سازی دستی و قابل‌بازگشت است.
+
+راهنمای ساده و عملی: [docs/25_CONTROLLED_LEARNING_LOOP.md](docs/25_CONTROLLED_LEARNING_LOOP.md).
+
+## کمپین Paper Trading
+
+ایجاد/ترمیم کمپین فعال، آرشیو پورتفوی قدیمی و حفظ rollback:
+
+```powershell
+py -3.11 tools/start_paper_campaign.py --confirm-archive-existing
+py -3.11 tools/quarantine_fixture_data.py --confirm
+```
+
+راهنمای کامل: [docs/23_PAPER_CAMPAIGN_RUNBOOK.md](docs/23_PAPER_CAMPAIGN_RUNBOOK.md).
+
+## مستندات اصلی
+
+- [معماری](docs/02_ARCHITECTURE.md)
+- [منابع داده ایران](docs/03_DATA_SOURCES_IRAN.md)
+- [کاتالوگ استراتژی](docs/06_STRATEGY_CATALOG.md)
+- [امتیازدهی و کالیبراسیون](docs/07_SIGNAL_SCORING_AND_CALIBRATION.md)
+- [بک‌تست و اعتبارسنجی](docs/08_BACKTEST_AND_VALIDATION.md)
+- [ریسک و اجرا](docs/09_RISK_AND_EXECUTION.md)
+- [امنیت و مشاهده‌پذیری](docs/13_SECURITY_AND_OBSERVABILITY.md)
+- [دانش معامله‌گری](docs/22_TRADING_KNOWLEDGE_BASE.md)
+- [چرخه یادگیری و تنظیم کنترل‌شده](docs/25_CONTROLLED_LEARNING_LOOP.md)
+- [معیارهای پذیرش](docs/20_ACCEPTANCE_CRITERIA.md)
+
+## کنترل کیفیت
+
+```powershell
+py -3.11 -m pytest tests/ -q
+node apps/web/node_modules/typescript/bin/tsc --noEmit -p apps/web/tsconfig.json
 node scripts/capture_all_views.js
 ```
 
-See [CHECKLIST.md](CHECKLIST.md) and [DESIGN.md](DESIGN.md) for full engineering and design standards.
+انتشار نهایی تنها وقتی مجاز است که تست‌ها، ۱۰ فونت محلی Vazirmatn، BiDi فارسی، قیمت‌های جاری رسمی و تصاویر Playwright همگی با شواهد مستقل تأیید شده باشند.
 
----
+## ایمنی اجرای واقعی
 
-## ⚖️ License
-MIT License. Built for research and quantitative paper trading.
+اتصال کارگزاری در فاز فعلی غیرفعال است. حتی در توسعه آینده، اجرای واقعی فقط با پنج گیت صریح `TRADING_MODE=live`، `LIVE_TRADING_ENABLED=true`، آداپتور مجاز، credential موجود و `RISK_KILL_SWITCH_ARMED=true` امکان‌پذیر خواهد بود.

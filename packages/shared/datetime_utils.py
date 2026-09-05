@@ -1,8 +1,12 @@
 """Date and time utilities with Jalali (Shamsi) and UTC timezone support."""
 from datetime import datetime, timezone, date
+from zoneinfo import ZoneInfo
 import jdatetime
 
 from packages.shared.persian import to_persian_digits
+
+
+TEHRAN_TZ = ZoneInfo("Asia/Tehran")
 
 
 def now_utc() -> datetime:
@@ -30,11 +34,12 @@ def to_jalali_str(dt: datetime | date | None, include_time: bool = True, persian
         return "-"
 
     if isinstance(dt, datetime):
-        # Default Tehran offset if naive
+        # Persisted datetimes are UTC; all user-facing Jalali clocks are Tehran local.
         if dt.tzinfo is None:
-            jdt = jdatetime.datetime.fromgregorian(datetime=dt)
+            local_dt = dt.replace(tzinfo=timezone.utc).astimezone(TEHRAN_TZ)
         else:
-            jdt = jdatetime.datetime.fromgregorian(datetime=dt)
+            local_dt = dt.astimezone(TEHRAN_TZ)
+        jdt = jdatetime.datetime.fromgregorian(datetime=local_dt.replace(tzinfo=None))
 
         if include_time:
             res = jdt.strftime("%Y/%m/%d %H:%M:%S")

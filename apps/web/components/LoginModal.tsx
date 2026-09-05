@@ -7,7 +7,7 @@ interface LoginModalProps {
 }
 
 export const LoginModal: React.FC<LoginModalProps> = ({ onLoginSuccess }) => {
-  const [username, setUsername] = useState("admin");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -39,13 +39,6 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onLoginSuccess }) => {
 
       if (!res.ok) {
         throw new Error(data.detail || "نام کاربری یا رمز عبور نامعتبر است.");
-      }
-
-      // Save token in localStorage for persistent 30-day cross-session access
-      if (data.token) {
-        localStorage.setItem("radar_auth_token", data.token);
-        localStorage.setItem("radar_auth_user", data.username);
-        localStorage.setItem("radar_auth_login_at", new Date().toISOString());
       }
 
       onLoginSuccess(data.username);
@@ -107,7 +100,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onLoginSuccess }) => {
             سامانه رادار بازار سرمایه
           </h2>
           <p style={{ fontSize: "0.82rem", color: "#94a3b8", lineHeight: 1.5 }}>
-            ورود به پنل پایش هوشمند، مدیریت معاملات و پورتفوی ۱ میلیارد تومانی
+            ورود مالک سامانه برای پایش معاملات کاغذی و پورتفوی ۱۰ میلیارد تومانی
           </p>
         </div>
 
@@ -143,7 +136,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onLoginSuccess }) => {
                 type="text"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                placeholder="نام کاربری (پیش‌فرض: admin)"
+                placeholder="نام کاربری"
                 style={{
                   width: "100%",
                   padding: "0.75rem 1rem 0.75rem 2.5rem",
@@ -203,7 +196,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onLoginSuccess }) => {
             }}
           >
             <CheckCircle2 size={14} color="#22c55e" />
-            <span>نشست پایدار ۳۰ روزه فعال است (بدون نیاز به لاگین مکرر)</span>
+            <span>نشست در کوکی HttpOnly نگهداری می‌شود و برای جاوااسکریپت قابل خواندن نیست.</span>
           </div>
 
           <button

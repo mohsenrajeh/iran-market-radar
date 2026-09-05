@@ -21,7 +21,11 @@ def connect_ssh(
     Connects to the remote Linux server using SSH keys or password fallback.
     """
     ssh = paramiko.SSHClient()
-    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    ssh.load_system_host_keys()
+    known_hosts = os.environ.get("RADAR_KNOWN_HOSTS_FILE", "").strip()
+    if known_hosts:
+        ssh.load_host_keys(known_hosts)
+    ssh.set_missing_host_key_policy(paramiko.RejectPolicy())
 
     effective_password = password or os.environ.get("RADAR_SERVER_PASSWORD", "").strip() or None
 

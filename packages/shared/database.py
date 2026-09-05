@@ -20,6 +20,8 @@ try:
         future=True,
     )
 except Exception:
+    if settings.app_env.lower() == "production":
+        raise
     async_engine = create_async_engine(
         "sqlite+aiosqlite:///./iran_market_radar.db",
         echo=False,
@@ -47,6 +49,8 @@ try:
                 pass
             sync_url = host_pg_url
         except Exception:
+            if settings.app_env.lower() == "production":
+                raise
             sync_url = "sqlite:///./iran_market_radar.db"
 
     sync_engine = create_engine(
@@ -55,6 +59,8 @@ try:
         future=True,
     )
 except Exception:
+    if settings.app_env.lower() == "production":
+        raise
     sync_engine = create_engine(
         "sqlite:///./iran_market_radar.db",
         echo=False,
@@ -117,6 +123,30 @@ def init_db_sync():
         "ALTER TABLE filing ADD COLUMN IF NOT EXISTS impact_score FLOAT DEFAULT 5.0",
         "ALTER TABLE filing ADD COLUMN IF NOT EXISTS summary_fa TEXT DEFAULT ''",
         "ALTER TABLE published_signal ADD COLUMN IF NOT EXISTS current_price FLOAT DEFAULT 0.0",
+        "ALTER TABLE published_signal ADD COLUMN IF NOT EXISTS decision_components JSON DEFAULT '{}'::json",
+        "ALTER TABLE market_snapshot ADD COLUMN IF NOT EXISTS source_key VARCHAR(64)",
+        "ALTER TABLE market_snapshot ADD COLUMN IF NOT EXISTS batch_id VARCHAR(36)",
+        "ALTER TABLE market_snapshot ADD COLUMN IF NOT EXISTS trust_tier VARCHAR(32) DEFAULT 'UNVERIFIED'",
+        "ALTER TABLE market_snapshot ADD COLUMN IF NOT EXISTS trade_eligible BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE eod_bar ADD COLUMN IF NOT EXISTS source_key VARCHAR(64)",
+        "ALTER TABLE eod_bar ADD COLUMN IF NOT EXISTS batch_id VARCHAR(36)",
+        "ALTER TABLE eod_bar ADD COLUMN IF NOT EXISTS trust_tier VARCHAR(32) DEFAULT 'UNVERIFIED'",
+        "ALTER TABLE eod_bar ADD COLUMN IF NOT EXISTS trade_eligible BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE market_snapshot ALTER COLUMN volume TYPE BIGINT",
+        "ALTER TABLE eod_bar ALTER COLUMN volume TYPE BIGINT",
+        "ALTER TABLE reference_market_observation ALTER COLUMN volume TYPE BIGINT",
+        "ALTER TABLE published_signal ALTER COLUMN strategy_version TYPE VARCHAR(512)",
+        "ALTER TABLE client_type_snapshot ADD COLUMN IF NOT EXISTS source_key VARCHAR(64)",
+        "ALTER TABLE client_type_snapshot ADD COLUMN IF NOT EXISTS batch_id VARCHAR(36)",
+        "ALTER TABLE client_type_snapshot ADD COLUMN IF NOT EXISTS trust_tier VARCHAR(32) DEFAULT 'UNVERIFIED'",
+        "ALTER TABLE client_type_snapshot ADD COLUMN IF NOT EXISTS trade_eligible BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE client_type_snapshot ALTER COLUMN real_buy_volume TYPE BIGINT",
+        "ALTER TABLE client_type_snapshot ALTER COLUMN real_sell_volume TYPE BIGINT",
+        "ALTER TABLE client_type_snapshot ALTER COLUMN legal_buy_volume TYPE BIGINT",
+        "ALTER TABLE client_type_snapshot ALTER COLUMN legal_sell_volume TYPE BIGINT",
+        "ALTER TABLE broker_order ADD COLUMN IF NOT EXISTS last_evaluated_snapshot_at TIMESTAMPTZ",
+        "ALTER TABLE reference_market_observation DROP CONSTRAINT IF EXISTS uq_reference_batch_ticker",
+        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'uq_reference_batch_instrument') THEN ALTER TABLE reference_market_observation ADD CONSTRAINT uq_reference_batch_instrument UNIQUE (batch_id, source_instrument_code); END IF; END $$",
     ]
 
     with sync_engine.begin() as conn:

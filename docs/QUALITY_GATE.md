@@ -1,37 +1,50 @@
-# QUALITY_GATE.md — Pre-Flight Checklist & Verification Protocols
+# Quality Gate — کنترل پیش از انتشار
 
-This document defines the strict validation steps required before declaring any feature or bugfix complete.
+هیچ تغییر مالی با یک تست واحد «کامل» محسوب نمی‌شود.
 
 ```mermaid
-graph TD
-    A[Code Changes] --> B[Unit & Invariant Tests]
-    B --> C[Persian BiDi & Typography Check]
-    C --> D[Real Market Price Verification]
-    D --> E[Playwright 13-View Capture]
-    E --> F[Visual Inspection of Screenshots]
-    F --> G[Git Commit & Documentation]
+flowchart LR
+  A["Unit and invariant tests"] --> B["Type and build checks"]
+  B --> C["Fonts and Persian BiDi"]
+  C --> D["Official current price contract"]
+  D --> E["Playwright capture"]
+  E --> F["Independent visual review"]
 ```
 
-## Step 1: Automated Unit Tests & Invariant Verification
-```bash
-pytest tests/ -v
+## ۱. تست و invariant
+
+```powershell
+py -3.11 -m pytest tests/ -q
+node apps/web/node_modules/typescript/bin/tsc --noEmit -p apps/web/tsconfig.json
 ```
-All financial transformations (drawdown calculations, transaction fee splits, BiDi string isolations, indicator math) must pass.
 
-## Step 2: Font & Offline Assets Verification
-1. Ensure all font files are served from `/fonts/` locally in `apps/web/public/fonts/`.
-2. Inspect network tab / build output to ensure zero external requests to `fonts.googleapis.com` or `fonts.gstatic.com`.
+کارمزد، مالیات، cash ledger، next-snapshot fill، timestamp منبع، جلوگیری از look-ahead، کمپین فعال یکتا و گیت داده باید پوشش داشته باشند.
 
-## Step 3: Real Market Price Integrity
-Ensure base prices in `packages/data_adapters/fixtures.py` and synced bars match real-world Tehran Stock Exchange levels:
-- شبریز: ۴۳,۲۴۰ ریال
-- فولاد: ۲,۷۸۵ ریال
-- وبملت: ۱,۲۹۱ ریال
-- وتجارت: ۷۷۴ ریال
-- فزر: ۲۰۴,۳۰۰ ریال
+## ۲. فونت و BiDi
 
-## Step 4: Playwright Headless Verification
-```bash
+- دقیقاً ۱۰ فایل Vazirmatn باید از `apps/web/public/fonts/` محلی بارگذاری شوند.
+- وابستگی به Google Fonts مجاز نیست.
+- قیمت، درصد، تاریخ و پرانتز در RTL باید با LRM (`\u200E`) یا isolate معتبر رندر شوند.
+
+## ۳. قیمت جاری
+
+fixture یا عدد ثابت با «قیمت واقعی» مقایسه نمی‌شود. در زمان آزمون باید:
+
+- receipt رسمی `HEALTHY` باشد؛
+- timestamp منبع، واحد ریال و دامنه مجاز ثبت شود؛
+- حداقل یک cross-check مستقل/مسیر انتقال ثانویه اختلاف قیمت را در tolerance مصوب بررسی کند؛
+- داده stale یا اختلاف حل‌نشده، گیت معامله را ببندد.
+
+اگر VPN/TLS دسترسی را قطع کند، این مرحله `BLOCKED` است و انتشار ادعای قیمت جاری ممنوع می‌ماند.
+
+## ۴. مرورگر
+
+```powershell
 node scripts/capture_all_views.js
 ```
-Review the 13 PNG images in `screenshots/` to verify zero visual overlap, no broken numbers, and flawless Persian RTL alignment.
+
+تمام viewها در desktop و موبایل بازبینی می‌شوند: empty/error/loading state، RTL، overflow، عدد ساختگی، provenance، دکمه‌های دارای اثر و احراز هویت.
+
+## ۵. نتیجه
+
+گزارش نهایی باید وضعیت هر گیت را `VALIDATED`، `PARTIAL` یا `BLOCKED` اعلام کند. نبود داده یا runtime قابل دسترسی با حدس جایگزین نمی‌شود.

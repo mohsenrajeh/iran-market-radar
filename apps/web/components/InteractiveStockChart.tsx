@@ -62,10 +62,8 @@ export const InteractiveStockChart: React.FC<InteractiveStockChartProps> = ({
   target1,
   target2,
   stopLoss,
-  isGoodStock = true,
+  isGoodStock = false,
   sellAdvicePrice,
-  rsiValue = 58.4,
-  marketRegime = "risk_on",
   chaseLimitR = 0.35,
 }) => {
   const [selectedTimeframe, setSelectedTimeframe] = useState<"1D" | "60m" | "15m">("1D");
@@ -113,7 +111,7 @@ export const InteractiveStockChart: React.FC<InteractiveStockChartProps> = ({
 
   // Compute live RSI array for the pane
   const rsiSeries = useMemo(() => {
-    if (data.length < 14) return data.map(() => rsiValue);
+    if (data.length < 15) return data.map(() => null as number | null);
     const gains: number[] = [];
     const losses: number[] = [];
     for (let i = 1; i < data.length; i++) {
@@ -121,7 +119,7 @@ export const InteractiveStockChart: React.FC<InteractiveStockChartProps> = ({
       gains.push(diff > 0 ? diff : 0);
       losses.push(diff < 0 ? Math.abs(diff) : 0);
     }
-    const rsiArr: number[] = [rsiValue];
+    const rsiArr: (number | null)[] = Array(14).fill(null);
     let avgGain = gains.slice(0, 14).reduce((a, b) => a + b, 0) / 14;
     let avgLoss = losses.slice(0, 14).reduce((a, b) => a + b, 0) / 14;
     
@@ -132,13 +130,10 @@ export const InteractiveStockChart: React.FC<InteractiveStockChartProps> = ({
       avgLoss = (avgLoss * 13 + l) / 14;
       const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
       const val = 100 - (100 / (1 + rs));
-      rsiArr.push(Math.min(95, Math.max(15, Math.round(val * 10) / 10)));
-    }
-    while (rsiArr.length < data.length) {
-      rsiArr.unshift(rsiValue);
+      rsiArr.push(Math.min(100, Math.max(0, Math.round(val * 10) / 10)));
     }
     return rsiArr.slice(-data.length);
-  }, [data, rsiValue]);
+  }, [data]);
 
   // Dimensions & Multi-Pane Layout
   const svgWidth = 1040;
@@ -157,24 +152,22 @@ export const InteractiveStockChart: React.FC<InteractiveStockChartProps> = ({
   const chartW = svgWidth - leftPadding - rightPadding;
 
   // Active prices evaluation
-  const latestClose = data.length > 0 ? data[data.length - 1].close : 5000;
-  const effectiveEntry = avgFillPrice || plannedEntry || latestClose;
+  const latestClose = data.length > 0 ? data[data.length - 1].close : 0;
+  const effectiveEntry = avgFillPrice || (isGoodStock ? plannedEntry : undefined) || 0;
   const isFilled = Boolean(avgFillPrice && avgFillPrice > 0);
 
   // Compute Risk / Reward from active entry (avgFillPrice if filled, plannedEntry if pending)
-  const calcStop = stopLoss || Math.round(effectiveEntry * 0.945);
-  const calcT1 = target1 || Math.round(effectiveEntry * 1.075);
-  const calcT2 = target2 || Math.round(effectiveEntry * 1.145);
+  const calcStop = stopLoss ?? 0;
+  const calcT1 = target1 ?? 0;
+  const calcT2 = target2 ?? 0;
 
-  const initialRiskRials = Math.max(1, Math.abs(effectiveEntry - calcStop));
-  const reward1Rials = Math.max(1, calcT1 - effectiveEntry);
-  const reward2Rials = Math.max(1, calcT2 - effectiveEntry);
-  const rMultipleT1 = toPersianDigits((reward1Rials / initialRiskRials).toFixed(1));
-  const rMultipleT2 = toPersianDigits((reward2Rials / initialRiskRials).toFixed(1));
+  const initialRiskRials = calcStop > 0 && calcStop < effectiveEntry ? effectiveEntry - calcStop : 0;
+  const rMultipleT1 = initialRiskRials > 0 && calcT1 > effectiveEntry ? toPersianDigits(((calcT1 - effectiveEntry) / initialRiskRials).toFixed(1)) : "—";
+  const rMultipleT2 = initialRiskRials > 0 && calcT2 > effectiveEntry ? toPersianDigits(((calcT2 - effectiveEntry) / initialRiskRials).toFixed(1)) : "—";
 
   // Chase Check: Is price currently higher than planned entry by more than chaseLimitR * risk?
-  const maxChasePrice = plannedEntry ? plannedEntry + (initialRiskRials * chaseLimitR) : effectiveEntry * 1.02;
-  const isChaseBlocked = Boolean(!isFilled && plannedEntry && latestClose > maxChasePrice);
+  const maxChasePrice = plannedEntry && initialRiskRials > 0 ? plannedEntry + (initialRiskRials * chaseLimitR) : null;
+  const isChaseBlocked = Boolean(!isFilled && maxChasePrice && latestClose > maxChasePrice);
 
   // Price Scale Bounds (Tight & Institutional, accounting for candles and active levels)
   const allPrices = useMemo(() => {
@@ -189,9 +182,13 @@ export const InteractiveStockChart: React.FC<InteractiveStockChartProps> = ({
     return pList.filter((p) => typeof p === "number" && !isNaN(p) && p > 0);
   }, [data, effectiveEntry, calcT1, calcT2, calcStop, sellAdvicePrice, showPriceLines]);
 
+  if (data.length === 0) {
+    return <div className="card-panel" style={{ color: "var(--text-muted)", textAlign: "center" }}>دادهٔ قیمت معتبر برای رسم نمودار موجود نیست.</div>;
+  }
+
   const rawMin = allPrices.length > 0 ? Math.min(...allPrices) : 5000;
   const rawMax = allPrices.length > 0 ? Math.max(...allPrices) : 8000;
-  const priceMargin = (rawMax - rawMin) * 0.06 || 100;
+  const priceMargin = (rawMax - rawMin) * 0.06 || Math.max(rawMax * 0.01, 1);
   const minPrice = rawMin - priceMargin;
   const maxPrice = rawMax + priceMargin;
   const priceRange = maxPrice - minPrice || 1;
@@ -309,7 +306,7 @@ export const InteractiveStockChart: React.FC<InteractiveStockChartProps> = ({
               <ShieldCheck size={13} color="#22c55e" />
               <span>✅ معامله فعال در سبد • محاسبه R بر مبنای میانگین خرید ({formatFa(avgFillPrice)} ﷼)</span>
             </div>
-          ) : (
+          ) : isGoodStock ? (
             <div
               style={{
                 display: "flex",
@@ -326,6 +323,24 @@ export const InteractiveStockChart: React.FC<InteractiveStockChartProps> = ({
             >
               <Sparkles size={13} color="#38bdf8" />
               <span>آماده ورود با تیکت مدیریت ریسک (R/R هدف ۱: {rMultipleT1})</span>
+            </div>
+          ) : (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "0.35rem",
+                backgroundColor: "rgba(148, 163, 184, 0.10)",
+                border: "1px solid #475569",
+                color: "#cbd5e1",
+                padding: "3px 8px",
+                borderRadius: "4px",
+                fontSize: "0.72rem",
+                fontWeight: 800,
+              }}
+            >
+              <Info size={13} />
+              <span>تحلیل پژوهشی — بدون مجوز ورود یا سطوح اجرایی</span>
             </div>
           )}
 
@@ -496,7 +511,7 @@ export const InteractiveStockChart: React.FC<InteractiveStockChartProps> = ({
           })}
 
           {/* ── 2.2 Risk / Reward Shaded Zones (Entry->Target & Entry->Stop) */}
-          {showRiskRewardZones && showPriceLines && isGoodStock && (
+          {showRiskRewardZones && showPriceLines && isGoodStock && calcStop > 0 && calcT2 > 0 && (
             <>
               {/* Reward Zone (Entry up to Target 2) */}
               <rect
@@ -921,7 +936,8 @@ export const InteractiveStockChart: React.FC<InteractiveStockChartProps> = ({
               {/* RSI Curve Line */}
               <polyline
                 points={rsiSeries
-                  .map((val, i) => `${getBarX(i)},${getRsiY(val)}`)
+                  .map((val, i) => val == null ? null : `${getBarX(i)},${getRsiY(val)}`)
+                  .filter(Boolean)
                   .join(" ")}
                 fill="none"
                 stroke="#c084fc"

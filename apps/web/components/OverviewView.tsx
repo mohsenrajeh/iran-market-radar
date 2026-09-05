@@ -46,18 +46,13 @@ export const OverviewView: React.FC<OverviewProps> = ({
   onSelectSymbol,
   onNavigateTab,
 }) => {
-  const indices = overviewData?.indices || [
-    { name_fa: "شاخص کل بورس", value: 2184350, change_pct: 1.14, change_value: 24580 },
-    { name_fa: "شاخص کل هم‌وزن", value: 728400, change_pct: 0.88, change_value: 6370 },
-    { name_fa: "شاخص فرابورس ایران", value: 22640, change_pct: 0.62, change_value: 140 },
-  ];
+  const indices = Array.isArray(overviewData?.indices) ? overviewData.indices : [];
 
-  const totalBreadth = (overviewData?.breadth_advancers || 420) + (overviewData?.breadth_decliners || 180);
-  const advPct = Math.round(((overviewData?.breadth_advancers || 420) / totalBreadth) * 100);
+  const totalBreadth = (overviewData?.breadth_advancers ?? 0) + (overviewData?.breadth_decliners ?? 0) + (overviewData?.breadth_unchanged ?? 0);
+  const advPct = totalBreadth > 0 ? Math.round(((overviewData?.breadth_advancers ?? 0) / totalBreadth) * 100) : 0;
 
-  // Synchronized Portfolio KPIs (Single Source of Truth - 1 Billion Tomans / 10 Billion Rials Base)
-  const initialCapRials = 10_000_000_000;
-  const initialCapTomans = 1_000_000_000;
+  // Synchronized Portfolio KPIs. The API owns the campaign capital baseline.
+  const initialCapRials = portfolioData?.initial_cash ?? 100_000_000_000;
   const totalNavRials = portfolioData?.total_equity ?? initialCapRials;
   const totalNavTomans = totalNavRials / 10;
   const cashRials = portfolioData?.cash ?? initialCapRials;
@@ -67,40 +62,13 @@ export const OverviewView: React.FC<OverviewProps> = ({
   const openCount = portfolioData?.open_positions_count ?? openPositions.length;
 
   // Attractive Sectors Data
-  const attractiveSectors = [
-    {
-      name_fa: "فلزات اساسی",
-      attractiveness_score: 92,
-      money_inflow_toman: "+۴۵.۲ میلیارد تومان",
-      trend_fa: "صعودی پرقدرت",
-      top_symbols: ["فولاد", "فملی", "فخوز"],
-      catalyst: "افزایش نرخ شمش در بورس کالا و رشد دلار نیما",
-    },
-    {
-      name_fa: "محصولات شیمیایی و پتروشیمی",
-      attractiveness_score: 88,
-      money_inflow_toman: "+۳۸.۰ میلیارد تومان",
-      trend_fa: "صعودی تثبیت‌شده",
-      top_symbols: ["نوری", "فارس", "شپنا"],
-      catalyst: "گزارش‌های ماهانه عالی کدال و حاشیه سود بالای ۳۰٪",
-    },
-    {
-      name_fa: "استخراج کانه‌های فلزی (معدنی)",
-      attractiveness_score: 85,
-      money_inflow_toman: "+۲۲.۵ میلیارد تومان",
-      trend_fa: "در حال شکست مقاومت",
-      top_symbols: ["کچاد", "کگل"],
-      catalyst: "تراز مالی قوی و F-Score بالای ۸ پیوتروسکی",
-    },
-    {
-      name_fa: "سیمان، آهک و گچ",
-      attractiveness_score: 81,
-      money_inflow_toman: "+۱۴.۸ میلیارد تومان",
-      trend_fa: "صعودی شتاب‌دار",
-      top_symbols: ["سشرق", "سفارس"],
-      catalyst: "رقابت خریداران در رینگ فیزیکی بورس کالا",
-    },
-  ];
+  const attractiveSectors = (sectors || []).slice(0, 4).map((sector: any) => ({
+    name_fa: sector.name_fa,
+    attractiveness_score: sector.breadth_pct ?? null,
+    money_inflow_toman: formatToman((sector.net_real_inflow_rials ?? 0) / 10),
+    top_symbols: [] as string[],
+    catalyst: `مومنتوم ۲۰روزه ${formatPercentFa(sector.momentum_20d_pct ?? 0, 1)}، پهنای صعودی ${formatPercentFa(sector.breadth_pct ?? 0, 1)}، رتبه قدرت نسبی ${toPersianDigits(sector.relative_strength_rank ?? "—")}`,
+  }));
 
   const handleStockClick = (symbolOrOpp: any) => {
     if (typeof symbolOrOpp === "string") {
@@ -175,22 +143,9 @@ export const OverviewView: React.FC<OverviewProps> = ({
             <h2 style={{ fontSize: "1.2rem", fontWeight: 900, color: "#f8fafc", margin: 0 }}>
               داشبورد عملکرد سرمایه‌گذاری و وضعیت کل دارایی‌ها
             </h2>
-            <span
-              style={{
-                fontSize: "0.72rem",
-                padding: "2px 8px",
-                borderRadius: "12px",
-                backgroundColor: "rgba(59, 130, 246, 0.15)",
-                color: "#60a5fa",
-                fontWeight: 700,
-                border: "1px solid rgba(59, 130, 246, 0.3)",
-              }}
-            >
-              سود مازاد بر شاخص کل (Alpha &gt; +3%)
-            </span>
           </div>
           <p style={{ fontSize: "0.84rem", color: "var(--text-secondary)", marginTop: "0.4rem", marginBottom: 0 }}>
-            سرمایه پایه: ۱ میلیارد تومان • ارزش روز کل دارایی‌ها: {formatToman(totalNavTomans)}
+            سرمایه پایه: {formatToman(initialCapRials / 10)} • ارزش روز کل دارایی‌ها: {formatToman(totalNavTomans)}
           </p>
         </div>
 
@@ -250,12 +205,12 @@ export const OverviewView: React.FC<OverviewProps> = ({
 
         {openPositions.length === 0 ? (
           <div style={{ textAlign: "center", padding: "2rem", color: "var(--text-secondary)", backgroundColor: "var(--bg-surface)", borderRadius: "8px" }}>
-            در حال حاضر معامله بازی وجود ندارد. ربات در چرخه بعدی بر اساس بهترین سیگنال‌ها ورود خواهد کرد.
+            در حال حاضر معامله بازی وجود ندارد. ورود فقط پس از دریافت داده تازه و عبور کامل از گیت‌های تکنیکال، بنیادی و ریسک انجام می‌شود.
           </div>
         ) : (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "0.85rem" }}>
             {openPositions.map((pos: any) => {
-              const pnlToman = (pos.unrealized_pnl || (pos.current_price - pos.average_entry_price) * (pos.quantity || 50000)) / 10;
+              const pnlToman = (pos.unrealized_pnl ?? ((pos.current_price - pos.average_entry_price) * pos.quantity)) / 10;
               const pnlPct = pos.unrealized_pnl_pct !== undefined ? pos.unrealized_pnl_pct : (((pos.current_price - pos.average_entry_price) / pos.average_entry_price) * 100);
               const isP = pnlPct >= 0;
 
@@ -298,7 +253,7 @@ export const OverviewView: React.FC<OverviewProps> = ({
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: "0.2rem", fontSize: "0.74rem", color: "var(--tse-blue)" }}>
                     <span style={{ fontWeight: 600 }}>مشاهده تحلیل و نمودار ←</span>
                     <span style={{ color: "var(--text-secondary)" }}>
-                      هدف: {pos.target_price ? formatRial(pos.target_price) : "+۷.۵٪"}
+                      هدف: {pos.target_price ? formatRial(pos.target_price) : "—"}
                     </span>
                   </div>
                 </div>
@@ -348,7 +303,7 @@ export const OverviewView: React.FC<OverviewProps> = ({
                     fontWeight: 800,
                   }}
                 >
-                  امتیاز {toPersianDigits(sec.attractiveness_score)}/۱۰۰
+                  پهنای صعودی {formatPercentFa(sec.attractiveness_score, 1)}
                 </span>
               </div>
 
@@ -392,7 +347,7 @@ export const OverviewView: React.FC<OverviewProps> = ({
             <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
               <Flame size={18} color="var(--tse-green)" />
               <h3 style={{ margin: 0, fontWeight: 800, fontSize: "0.95rem", color: "var(--text-primary)" }}>
-                فرصت‌های رتبه اول هوش مصنوعی برای ورود
+                فرصت‌های قابل اقدام برای ورود
               </h3>
             </div>
             <button
@@ -444,16 +399,16 @@ export const OverviewView: React.FC<OverviewProps> = ({
                         <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>{opp.name_fa}</span>
                       </div>
                       <div style={{ fontSize: "0.72rem", color: "var(--tse-gold)", marginTop: "2px" }}>
-                        امتیاز: {toPersianDigits(opp.opportunity_score || 85)} • رتبه {opp.grade || "A"}
+                        امتیاز: {toPersianDigits(opp.opportunity_score)} • رتبه {opp.grade || "—"}
                       </div>
                     </div>
 
                     <div style={{ textAlign: "left" }}>
                       <div style={{ fontSize: "0.82rem", fontWeight: 700, color: "var(--tse-blue)" }}>
-                        {formatRial(opp.current_price || opp.entry_zone?.low || opp.entry_price || opp.cur_price || 3200)}
+                        {formatRial(opp.current_price ?? opp.entry_zone?.low ?? opp.entry_price ?? opp.cur_price)}
                       </div>
                       <div style={{ fontSize: "0.72rem", color: "var(--tse-green)", fontWeight: 600 }}>
-                        تارگت: {formatPercentFa(opp.expected_return_pct || opp.target_pct || 8.5, 1)}
+                        بازده مورد انتظار: {formatPercentFa(opp.expected_return_pct ?? opp.target_pct, 1)}
                       </div>
                     </div>
                   </div>

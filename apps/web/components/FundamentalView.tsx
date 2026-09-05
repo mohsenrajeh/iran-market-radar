@@ -34,24 +34,12 @@ interface FundamentalViewProps {
 }
 
 export const FundamentalView: React.FC<FundamentalViewProps> = ({ onSelectSymbol }) => {
-  const DEFAULT_FUNDAMENTAL_SYMBOLS = [
-    { id: "f1", symbol: "فولاد", name_fa: "فولاد مبارکه اصفهان", sector_name: "فلزات اساسی", fundamental_score: 88, fundamental_grade: "A+", valuation_status: "undervalued", valuation_status_fa: "ارزنده (زیر ارزش)", p_e_ratio: 5.4, sector_p_e: 6.2, p_s_ratio: 1.6, roe_pct: 39.5, net_margin_pct: 29.5, monthly_sales_growth_yoy: 48.0, piotroski_f_score: 8, dps_rials: 900, last_filing_title: "گزارش فعالیت ماهانه تیرماه با رشد ۴۸٪ درآمد", last_filing_signal: "bullish" },
-    { id: "f2", symbol: "نوری", name_fa: "پتروشیمی نوری", sector_name: "محصولات شیمیایی", fundamental_score: 94, fundamental_grade: "A+", valuation_status: "undervalued", valuation_status_fa: "ارزنده (زیر ارزش)", p_e_ratio: 5.6, sector_p_e: 5.9, p_s_ratio: 1.4, roe_pct: 48.0, net_margin_pct: 24.0, monthly_sales_growth_yoy: 54.0, piotroski_f_score: 9, dps_rials: 22000, last_filing_title: "افشای اطلاعات بااهمیت - انعقاد قرارداد صادراتی", last_filing_signal: "bullish" },
-    { id: "f3", symbol: "فملی", name_fa: "ملی صنایع مس ایران", sector_name: "فلزات اساسی", fundamental_score: 89, fundamental_grade: "A+", valuation_status: "undervalued", valuation_status_fa: "ارزنده (زیر ارزش)", p_e_ratio: 5.8, sector_p_e: 6.2, p_s_ratio: 1.8, roe_pct: 41.0, net_margin_pct: 33.0, monthly_sales_growth_yoy: 45.0, piotroski_f_score: 8, dps_rials: 800, last_filing_title: "اطلاعات و صورت‌های مالی میاندوره‌ای ۶ ماهه", last_filing_signal: "bullish" },
-    { id: "f4", symbol: "کچاد", name_fa: "معدنی و صنعتی چادرملو", sector_name: "استخراج کانه‌های فلزی", fundamental_score: 86, fundamental_grade: "A+", valuation_status: "undervalued", valuation_status_fa: "ارزنده (زیر ارزش)", p_e_ratio: 6.1, sector_p_e: 6.8, p_s_ratio: 2.2, roe_pct: 43.0, net_margin_pct: 36.0, monthly_sales_growth_yoy: 50.0, piotroski_f_score: 8, dps_rials: 600, last_filing_title: "گزارش فروش ماهانه منتهی به تیرماه", last_filing_signal: "bullish" },
-    { id: "f5", symbol: "شپنا", name_fa: "پالایش نفت اصفهان", sector_name: "فرآورده‌های نفتی", fundamental_score: 79, fundamental_grade: "A", valuation_status: "undervalued", valuation_status_fa: "ارزنده (زیر ارزش)", p_e_ratio: 4.9, sector_p_e: 5.4, p_s_ratio: 0.45, roe_pct: 32.0, net_margin_pct: 14.5, monthly_sales_growth_yoy: 31.0, piotroski_f_score: 7, dps_rials: 650, last_filing_title: "افشای اطلاعات بااهمیت گروه ب", last_filing_signal: "neutral" },
-    { id: "f6", symbol: "شتران", name_fa: "پالایش نفت تهران", sector_name: "فرآورده‌های نفتی", fundamental_score: 78, fundamental_grade: "A", valuation_status: "undervalued", valuation_status_fa: "ارزنده (زیر ارزش)", p_e_ratio: 5.1, sector_p_e: 5.4, p_s_ratio: 0.48, roe_pct: 34.0, net_margin_pct: 15.0, monthly_sales_growth_yoy: 33.0, piotroski_f_score: 7, dps_rials: 750, last_filing_title: "تصمیمات مجمع عمومی عادی سالیانه", last_filing_signal: "neutral" },
-    { id: "f7", symbol: "فارس", name_fa: "صنایع پتروشیمی خلیج فارس", sector_name: "محصولات شیمیایی", fundamental_score: 82, fundamental_grade: "A", valuation_status: "fair", valuation_status_fa: "منصفانه (همگام بازار)", p_e_ratio: 5.2, sector_p_e: 5.9, p_s_ratio: 3.8, roe_pct: 36.0, net_margin_pct: 85.0, monthly_sales_growth_yoy: 36.0, piotroski_f_score: 7, dps_rials: 800, last_filing_title: "صورت‌های مالی تلفیقی سال مالی منتهی به خرداد", last_filing_signal: "bullish" },
-    { id: "f8", symbol: "وغدیر", name_fa: "سرمایه‌گذاری غدیر", sector_name: "چندرشته‌ای صنعتی", fundamental_score: 84, fundamental_grade: "A+", valuation_status: "undervalued", valuation_status_fa: "ارزنده (زیر ارزش)", p_e_ratio: 5.0, sector_p_e: 5.8, p_s_ratio: 2.9, roe_pct: 34.0, net_margin_pct: 78.0, monthly_sales_growth_yoy: 35.0, piotroski_f_score: 8, dps_rials: 1400, last_filing_title: "تغییر بیش از ۱۰ درصد در سود عملیاتی", last_filing_signal: "bullish" },
-    { id: "f9", symbol: "شستا", name_fa: "سرمایه‌گذاری تامین اجتماعی", sector_name: "چندرشته‌ای صنعتی", fundamental_score: 81, fundamental_grade: "A", valuation_status: "undervalued", valuation_status_fa: "ارزنده (زیر ارزش)", p_e_ratio: 5.3, sector_p_e: 5.8, p_s_ratio: 2.4, roe_pct: 31.0, net_margin_pct: 72.0, monthly_sales_growth_yoy: 32.0, piotroski_f_score: 7, dps_rials: 180, last_filing_title: "افشای معاملات با اشخاص وابسته", last_filing_signal: "neutral" },
-    { id: "f10", symbol: "وبملت", name_fa: "بانک ملت", sector_name: "بانک‌ها و موسسات اعتباری", fundamental_score: 80, fundamental_grade: "A", valuation_status: "undervalued", valuation_status_fa: "ارزنده (زیر ارزش)", p_e_ratio: 4.2, sector_p_e: 4.8, p_s_ratio: 0.9, roe_pct: 26.0, net_margin_pct: 22.0, monthly_sales_growth_yoy: 42.0, piotroski_f_score: 7, dps_rials: 250, last_filing_title: "گزارش درآمد تسهیلات و سپرده‌گذاری ماهانه", last_filing_signal: "bullish" },
-  ];
-
   const [activeSubTab, setActiveSubTab] = useState<"matrix" | "codal" | "macro">("matrix");
-  const [symbolsData, setSymbolsData] = useState<any[]>(DEFAULT_FUNDAMENTAL_SYMBOLS);
+  const [symbolsData, setSymbolsData] = useState<any[]>([]);
   const [codalFeed, setCodalFeed] = useState<any[]>([]);
   const [macroData, setMacroData] = useState<any | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadErrors, setLoadErrors] = useState<string[]>([]);
 
   // Filters & Pagination
   const [searchTerm, setSearchTerm] = useState("");
@@ -66,21 +54,33 @@ export const FundamentalView: React.FC<FundamentalViewProps> = ({ onSelectSymbol
   }, []);
 
   const fetchFundamentalData = async () => {
+    setLoading(true);
+    setLoadErrors([]);
     try {
-      const [resSyms, resCodal, resMacro] = await Promise.all([
+      const results = await Promise.allSettled([
         fetch("/api/v1/fundamentals/symbols"),
         fetch("/api/v1/fundamentals/codal-feed?limit=40"),
         fetch("/api/v1/fundamentals/macro"),
       ]);
-
-      if (resSyms.ok) {
-        const data = await resSyms.json();
-        if (data && data.length > 0) setSymbolsData(data);
-      }
-      if (resCodal.ok) setCodalFeed(await resCodal.json());
-      if (resMacro.ok) setMacroData(await resMacro.json());
+      const errors: string[] = [];
+      const [symsResult, codalResult, macroResult] = results;
+      if (symsResult.status === "fulfilled" && symsResult.value.ok) {
+        const data = await symsResult.value.json();
+        setSymbolsData(Array.isArray(data) ? data : []);
+      } else errors.push("ماتریس بنیادی");
+      if (codalResult.status === "fulfilled" && codalResult.value.ok) {
+        const data = await codalResult.value.json();
+        setCodalFeed(Array.isArray(data) ? data : []);
+      } else errors.push("فید کدال");
+      if (macroResult.status === "fulfilled" && macroResult.value.ok) {
+        setMacroData(await macroResult.value.json());
+      } else errors.push("داده کلان");
+      setLoadErrors(errors);
     } catch (e) {
       console.error("Failed to load fundamental data:", e);
+      setLoadErrors(["ارتباط با سرویس بنیادی"]);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -105,7 +105,7 @@ export const FundamentalView: React.FC<FundamentalViewProps> = ({ onSelectSymbol
 
   const undervaluedCount = symbolsData.filter((s) => s.valuation_status === "undervalued").length;
   const aPlusCount = symbolsData.filter((s) => s.fundamental_grade === "A+").length;
-  const avgRoe = symbolsData.length ? toPersianDigits((symbolsData.reduce((acc, s) => acc + s.roe_pct, 0) / symbolsData.length).toFixed(1)) : "۳۴";
+  const avgRoe = symbolsData.length ? toPersianDigits((symbolsData.reduce((acc, s) => acc + s.roe_pct, 0) / symbolsData.length).toFixed(1)) : "—";
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
@@ -115,11 +115,11 @@ export const FundamentalView: React.FC<FundamentalViewProps> = ({ onSelectSymbol
           <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
             <PieChart size={24} color="var(--tse-green)" />
             <h2 style={{ fontSize: "1.25rem", fontWeight: 800, color: "var(--text-primary)", margin: 0 }}>
-              مرکز جامع تحلیل بنیادی، نسبت‌های مالی و هوش کدال (Fundamental & Codal Engine)
+              مرکز شواهد بنیادی و اطلاعیه‌های رسمی کدال
             </h2>
           </div>
           <p style={{ fontSize: "0.82rem", color: "var(--text-secondary)", marginTop: "0.35rem", marginBottom: 0 }}>
-            محاسبه خودکار ضرایب P/E و P/S، بازده حقوق صاحبان سهام (ROE)، امتیاز ۹‌معیاره پیوتروسکی، رصد هوشمند اطلاعیه‌های کدال و متغیرهای کلان بورس کالا
+            نسبت‌های بازار فقط در حد منبع موجود نمایش داده می‌شوند؛ اطلاعیه‌های کدال خام و بدون تفسیر یا احساس‌سنجی ساختگی نگهداری می‌شوند.
           </p>
         </div>
 
@@ -168,7 +168,7 @@ export const FundamentalView: React.FC<FundamentalViewProps> = ({ onSelectSymbol
             <FileText size={16} />
             <span>فید زنده اطلاعیه‌های کدال</span>
             <span style={{ fontSize: "0.7rem", backgroundColor: "rgba(59, 130, 246, 0.2)", color: "var(--tse-blue)", padding: "1px 6px", borderRadius: "10px", fontWeight: 700 }}>
-              {codalFeed.length || 18}
+              {toPersianDigits(codalFeed.length)}
             </span>
           </button>
 
@@ -196,6 +196,17 @@ export const FundamentalView: React.FC<FundamentalViewProps> = ({ onSelectSymbol
         </div>
       </div>
 
+      {loading && (
+        <div role="status" className="card-panel" style={{ color: "var(--tse-blue)", fontWeight: 700 }}>
+          در حال دریافت مستقل داده‌های بنیادی، کدال و کلان…
+        </div>
+      )}
+      {!loading && loadErrors.length > 0 && (
+        <div role="alert" className="card-panel" style={{ color: "var(--tse-amber)", fontWeight: 700 }}>
+          دریافت این بخش‌ها کامل نشد: {loadErrors.join("، ")}؛ سایر پنل‌های سالم همچنان نمایش داده می‌شوند.
+        </div>
+      )}
+
       {/* Point-in-Time Metadata & Data Freshness Bar */}
       <div
         style={{
@@ -213,14 +224,13 @@ export const FundamentalView: React.FC<FundamentalViewProps> = ({ onSelectSymbol
         }}
       >
         <div style={{ display: "flex", gap: "1.2rem", flexWrap: "wrap" }}>
-          <span>📅 <strong>تاریخ داده (as_of):</strong> ۲۵ مرداد ۱۴۰۵ (۱۵:۳۰)</span>
-          <span>🏢 <strong>جامعه آماری (sample_n):</strong> {symbolsData.length} شرکت منتخب</span>
-          <span>🌐 <strong>یونیورس (universe_id):</strong> TSE_TOP_150_LIQUID</span>
-          <span>📡 <strong>منبع داده (source):</strong> صورت‌های مالی کدال (Codal) + TSETMC</span>
+          <span>📅 <strong>تاریخ داده (as_of):</strong> {symbolsData[0]?.as_of || "بدون snapshot معتبر"}</span>
+          <span>🏢 <strong>جامعه آماری (sample_n):</strong> {toPersianDigits(symbolsData.length)} شرکت</span>
+          <span>🌐 <strong>یونیورس:</strong> نمادهای فعال با provenance معتبر</span>
+          <span>📡 <strong>منبع داده:</strong> فقط snapshotهای تأییدشده با حداقل دو upstream مستقل</span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-          <span style={{ color: "#22c55e", fontWeight: 700 }}>⚡ تازگی داده: بلادرنگ (Lag: 1.2s)</span>
-          <span style={{ backgroundColor: "#1e293b", padding: "2px 6px", borderRadius: "4px", color: "#38bdf8" }}>v2.4 Piotroski</span>
+          <span style={{ color: symbolsData.length ? "#22c55e" : "#f59e0b", fontWeight: 700 }}>⚡ وضعیت: {symbolsData.length ? "داده معتبر موجود" : "BLOCKED — بدون داده معتبر"}</span>
         </div>
       </div>
 
@@ -271,10 +281,10 @@ export const FundamentalView: React.FC<FundamentalViewProps> = ({ onSelectSymbol
             <span>نرخ حواله دلار نیما</span>
           </div>
           <div style={{ fontSize: "1.45rem", fontWeight: 900, color: "var(--text-primary)", marginTop: "0.3rem" }} className="tabular-num">
-            {macroData?.nima_usd_rate ? toPersianDigits((macroData.nima_usd_rate / 10).toLocaleString("en-US")) : "۶۸٬۴۵۰"} <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>تومان</span>
+            {macroData?.nima_usd_rate != null ? toPersianDigits((macroData.nima_usd_rate / 10).toLocaleString("en-US")) : "—"} <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>تومان</span>
           </div>
           <div style={{ fontSize: "0.72rem", color: "var(--tse-green)", marginTop: "0.2rem", fontWeight: 700 }}>
-            {formatPercentFa(macroData?.nima_usd_change_pct || 0.45, 2)} رشد در ماه جاری
+            {macroData?.nima_usd_change_pct != null ? `${formatPercentFa(macroData.nima_usd_change_pct, 2)} تغییر` : (macroData?.reason_fa || "منبع ماکرو معتبر در دسترس نیست")}
           </div>
         </div>
       </div>
@@ -658,15 +668,20 @@ export const FundamentalView: React.FC<FundamentalViewProps> = ({ onSelectSymbol
             <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
               <FileText size={18} color="var(--tse-blue)" />
               <h3 style={{ fontSize: "1.05rem", fontWeight: 800, color: "var(--text-primary)", margin: 0 }}>
-                فید زنده و تحلیل محتوای اطلاعیه‌های سامانه کدال (Codal Live Intelligence)
+                فید خام اطلاعیه‌های رسمی سامانه کدال
               </h3>
             </div>
             <p style={{ fontSize: "0.78rem", color: "var(--text-secondary)", margin: "0.3rem 0 0" }}>
-              استخراج خودکار صورت‌های مالی، گزارش‌های ماهانه و افشاهای بااهمیت همراه با برچسب اثرگذاری و خلاصه‌سازی هوشمند
+              عنوان، زمان و لینک رسمی اطلاعیه‌ها؛ بدون خلاصه‌سازی، احساس‌سنجی یا امتیاز اثرگذاری ماشینی
             </p>
           </div>
 
           <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+            {!loading && codalFeed.length === 0 && (
+              <div className="card-panel" style={{ color: "var(--text-secondary)" }}>
+                هنوز اطلاعیهٔ رسمی قابل نمایش دریافت نشده است؛ وضعیت منبع را در بخش سلامت داده بررسی کنید.
+              </div>
+            )}
             {codalFeed.map((filing) => {
               const isPositive = filing.sentiment === "positive";
               const isNegative = filing.sentiment === "negative";
@@ -760,7 +775,7 @@ export const FundamentalView: React.FC<FundamentalViewProps> = ({ onSelectSymbol
                   </div>
 
                   <div style={{ fontSize: "0.8rem", color: "var(--text-secondary)", backgroundColor: "var(--bg-surface)", padding: "0.6rem 0.85rem", borderRadius: "var(--radius-sm)", lineHeight: 1.5 }}>
-                    💡 <strong>تحلیل رادار:</strong> {filing.summary_fa}
+                    <strong>عنوان ثبت‌شده در منبع:</strong> {filing.summary_fa}
                   </div>
                 </div>
               );

@@ -1,21 +1,53 @@
 data_sources:
   tsetmc:
     enabled: true
-    adapter: "official_rest"
-    docs_url: "https://api.tsetmc.com/docs/"
-    # Actual endpoint/auth/rate values MUST be read from current official docs.
+    adapter: "public_cdn_json"
+    base_url: "https://cdn.tsetmc.com"
+    docs_url: "https://cdn.tsetmc.com"
     max_concurrency: 4
-    request_timeout_seconds: 20
-    retry_attempts: 5
+    # Keep the operator refresh responsive when a VPN blocks the official host.
+    # Historical backfills are separate jobs and may apply their own outer retry policy.
+    request_timeout_seconds: 15
+    retry_attempts: 2
     backoff_initial_seconds: 1
   sedra:
     enabled: false
     adapter: "official_rest"
     enable_when_credentials_available: true
+  tindex:
+    enabled: false
+    adapter: "documented_rest"
+    base_url: "https://tindex.app"
+    request_timeout_seconds: 10
+    max_response_bytes: 4000000
+    # Free plan contract: 1 request/minute and 100 successful requests/day.
+    minimum_request_interval_seconds: 60
+    daily_success_limit: 100
+    overview_refresh_seconds: 300
+    screener_refresh_seconds: 3600
+  bourseview:
+    enabled: false
+    adapter: "contract_pending"
+    base_url: "https://api.bourseview.com"
+  sourcearena:
+    enabled: false
+    adapter: "documented_rest"
+    base_url: "https://apis.sourcearena.ir"
+    request_timeout_seconds: 10
+    max_response_bytes: 8000000
+  brsapi:
+    enabled: false
+    adapter: "documented_rest"
+    base_url: "https://api.brsapi.ir"
+    request_timeout_seconds: 15
+    max_response_bytes: 12000000
+    # Fair-use ceiling is 300 requests per five minutes. We deliberately use
+    # at most one request per five seconds and share the gate through Redis.
+    minimum_request_interval_seconds: 5
 
 cadence:
   instrument_master_minutes: 1440
-  market_watch_seconds: 10
+  market_watch_seconds: 60
   orderbook_seconds: 10
   client_type_seconds: 30
   codal_poll_seconds: 120
@@ -23,5 +55,7 @@ cadence:
 
 quality:
   critical_market_stale_seconds: 60
+  fundamental_receipt_stale_seconds: 86400
+  minimum_expected_equity_universe: 900
   max_duplicate_ratio: 0.001
   minimum_symbol_completeness_ratio: 0.98

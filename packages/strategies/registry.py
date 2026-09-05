@@ -51,9 +51,27 @@ class StrategyRegistry:
             if ctx.horizon in strat.supported_horizons:
                 res = strat.evaluate(ctx)
                 if res is not None:
+                    res.family = STRATEGY_FAMILY_BY_KEY.get(strat.key, "unclassified")
                     candidates.append(res)
         return candidates
 
 
 # Singleton instance
 strategy_registry = StrategyRegistry()
+
+
+STRATEGY_FAMILY_BY_KEY = {
+    "cross_sectional_momentum": "trend",
+    "time_series_trend": "trend",
+    "trend_pullback": "trend",
+    "ichimoku_cloud_trend": "trend",
+    "breakout_volume": "breakout_volatility",
+    "volume_anomaly": "breakout_volatility",
+    "bb_squeeze_breakout": "breakout_volatility",
+    "selective_mean_reversion": "mean_reversion",
+    "client_flow": "smart_money",
+    "smart_money_divergence": "smart_money",
+    "sector_rotation": "relative_strength",
+    # Composite signals are useful evidence but are not counted as an independent family.
+    "multi_indicator_confluence": "composite",
+}

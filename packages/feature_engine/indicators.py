@@ -561,7 +561,7 @@ def compute_symbol_features(
     avg_turnover_20d = float(np.mean(values[-min(n, 20):])) if n > 0 else values[-1]
 
     # 6. حقیقی / حقوقی Client Type Flow
-    real_buyer_power_ratio = 1.0
+    real_buyer_power_ratio = 0.0
     net_real_inflow_pct = 0.0
     real_accumulation_streak = 0
 
@@ -642,6 +642,7 @@ def compute_symbol_features(
         "volume_ratio_20d": volume_ratio_20d,
         "avg_turnover_20d": avg_turnover_20d,
         "real_buyer_power_ratio": real_buyer_power_ratio,
+        "client_type_available": 1.0 if client_types else 0.0,
         "net_real_inflow_pct": net_real_inflow_pct,
         "real_accumulation_streak": float(real_accumulation_streak),
         "ichimoku_tenkan": float(ichimoku["tenkan_sen"][-1]),

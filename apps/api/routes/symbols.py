@@ -23,10 +23,11 @@ from packages.feature_engine.indicators import (
     compute_cmf,
 )
 from packages.data_adapters.tsetmc import TSETMCAdapter
-from packages.data_adapters.fixtures import FixtureReplayAdapter
 from packages.shared.database import get_sync_db
 from packages.shared.datetime_utils import to_jalali_str
 from packages.shared.persian import normalize_ticker
+from packages.shared.config import settings
+from services.collector.trusted_queries import trusted_client_type_query, trusted_eod_query
 
 router = APIRouter(prefix="/symbols", tags=["Symbols & Charts"])
 
@@ -67,10 +68,12 @@ def get_symbol_chart(symbol_or_id: str, limit: int = Query(120, le=300), db: Ses
     )
     if not inst:
         raise HTTPException(status_code=404, detail="نماد مورد نظر یافت نشد.")
+    is_fixture = bool((inst.source_instrument_code or "").startswith("INS_"))
+    if settings.market_data_mode != "official" or is_fixture:
+        raise HTTPException(status_code=503, detail="نمودار این نماد provenance رسمی ندارد.")
 
     bars = (
-        db.query(EODBar)
-        .filter(EODBar.instrument_id == inst.id)
+        trusted_eod_query(db, inst.id)
         .order_by(EODBar.trading_date.desc())
         .limit(limit)
         .all()
@@ -78,7 +81,7 @@ def get_symbol_chart(symbol_or_id: str, limit: int = Query(120, le=300), db: Ses
     bars.reverse()
 
     if not bars:
-        raise HTTPException(status_code=404, detail="داده قیمتی برای این نماد ثبت نشده است.")
+        raise HTTPException(status_code=404, detail="تاریخچه رسمی و متصل به batch برای این نماد هنوز تکمیل نشده است.")
 
     # 1. Compute Array-based Technical Series
     closes = np.array([b.close for b in bars], dtype=float)
@@ -106,8 +109,7 @@ def get_symbol_chart(symbol_or_id: str, limit: int = Query(120, le=300), db: Ses
 
     # 2. Client-Type Snapshots (حقیقی و حقوقی)
     ct_snapshots = (
-        db.query(ClientTypeSnapshot)
-        .filter(ClientTypeSnapshot.instrument_id == inst.id)
+        trusted_client_type_query(db, inst.id)
         .all()
     )
     ct_map = {ct.trading_date: ct for ct in ct_snapshots}
@@ -115,12 +117,12 @@ def get_symbol_chart(symbol_or_id: str, limit: int = Query(120, le=300), db: Ses
     bar_items = []
     for i, b in enumerate(bars):
         ct = ct_map.get(b.trading_date)
-        bp_ratio = 1.0
-        r_buy_val = 0.0
-        l_buy_val = 0.0
-        r_sell_val = 0.0
-        l_sell_val = 0.0
-        net_flow = 0.0
+        bp_ratio = None
+        r_buy_val = None
+        l_buy_val = None
+        r_sell_val = None
+        l_sell_val = None
+        net_flow = None
 
         if ct:
             r_buy_val = float(ct.real_buy_value)
@@ -193,7 +195,7 @@ def get_symbol_chart(symbol_or_id: str, limit: int = Query(120, le=300), db: Ses
     last_rsi = float(rsi_arr[-1])
     last_macd = float(macd_l_arr[-1])
     last_macd_sig = float(macd_s_arr[-1])
-    last_bp = bar_items[-1].real_buy_power_ratio or 1.0
+    last_bp = bar_items[-1].real_buy_power_ratio
 
     # Trend Status Badge
     if last_close > ema_20_arr[-1] > ema_50_arr[-1]:
@@ -221,7 +223,9 @@ def get_symbol_chart(symbol_or_id: str, limit: int = Query(120, le=300), db: Ses
         macd_badge = "سیگنال اصلاحی MACD (خط مکدی زیر خط سیگنال)"
 
     # Client Flow (تابلوخوانی حقیقی/حقوقی)
-    if last_bp >= 1.5:
+    if last_bp is None:
+        flow_badge = "داده حقیقی/حقوقی معتبر برای این تاریخ ثبت نشده است."
+    elif last_bp >= 1.5:
         flow_badge = f"ورود پول هوشمند سنگین حقیقی (قدرت خریدار {last_bp} برابر)"
     elif last_bp >= 1.1:
         flow_badge = f"برتری نسبی خریداران حقیقی ({last_bp} برابر)"
@@ -245,15 +249,13 @@ def get_symbol_chart(symbol_or_id: str, limit: int = Query(120, le=300), db: Ses
         ],
     }
 
-    # 5. Realistic 5-level OrderBook Depth (عمق ۵ مظنه برتر)
-    spread_tick = max(1.0, round(last_close * 0.001))
-    orderbook = [
-        {"level": 1, "bid_price": round(last_close - 1 * spread_tick), "bid_volume": 250_000, "bid_count": 45, "ask_price": round(last_close + 1 * spread_tick), "ask_volume": 120_000, "ask_count": 22},
-        {"level": 2, "bid_price": round(last_close - 2 * spread_tick), "bid_volume": 180_000, "bid_count": 30, "ask_price": round(last_close + 2 * spread_tick), "ask_volume": 95_000, "ask_count": 18},
-        {"level": 3, "bid_price": round(last_close - 3 * spread_tick), "bid_volume": 320_000, "bid_count": 55, "ask_price": round(last_close + 3 * spread_tick), "ask_volume": 140_000, "ask_count": 28},
-        {"level": 4, "bid_price": round(last_close - 4 * spread_tick), "bid_volume": 410_000, "bid_count": 68, "ask_price": round(last_close + 4 * spread_tick), "ask_volume": 210_000, "ask_count": 35},
-        {"level": 5, "bid_price": round(last_close - 5 * spread_tick), "bid_volume": 550_000, "bid_count": 92, "ask_price": round(last_close + 5 * spread_tick), "ask_volume": 330_000, "ask_count": 48},
-    ]
+    latest_orderbook = (
+        db.query(OrderBookSnapshot)
+        .filter(OrderBookSnapshot.instrument_id == inst.id)
+        .order_by(OrderBookSnapshot.source_timestamp.desc())
+        .first()
+    )
+    orderbook = list(latest_orderbook.depth_levels or []) if latest_orderbook else []
 
     return SymbolChartResponse(
         symbol=inst.ticker,
@@ -280,7 +282,7 @@ async def sync_symbol_live(symbol_or_id: str, db: Session = Depends(get_sync_db)
     if not inst:
         raise HTTPException(status_code=404, detail="نماد مورد نظر یافت نشد.")
 
-    # Fetch from TSETMC live service or fixture replay fallback
+    # Fetch only from the official TSETMC live service; never label EOD as live.
     tsetmc = TSETMCAdapter()
     last_price = None
     close_price = None
@@ -293,15 +295,11 @@ async def sync_symbol_live(symbol_or_id: str, db: Session = Depends(get_sync_db)
             last_price = float(match.get("pDrCotVal", 0.0))
             close_price = float(match.get("pClosing", 0.0))
             volume = int(match.get("qTotTran5J", 0))
-    except Exception:
-        pass
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"دریافت زنده TSETMC ناموفق بود: {exc.__class__.__name__}") from exc
 
     if not last_price:
-        last_bar = db.query(EODBar).filter(EODBar.instrument_id == inst.id).order_by(EODBar.trading_date.desc()).first()
-        if last_bar:
-            last_price = last_bar.last
-            close_price = last_bar.close
-            volume = last_bar.volume
+        raise HTTPException(status_code=503, detail="TSETMC برای این نماد snapshot زنده معتبر برنگرداند.")
 
     return {
         "success": True,

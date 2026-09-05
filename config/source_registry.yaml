@@ -1,0 +1,289 @@
+version: "2026-08-18"
+policy:
+  production_mode: official
+  minimum_independent_fundamental_providers: 2
+  unknown_or_unverified_is_trade_blocking: true
+  generated_fixture_data_allowed_only_in_non_production: true
+  market_data_failover:
+    primary: tsetmc_public_cdn
+    contract_ready_candidates: []
+    cross_check_only: []
+    rule: no_automatic_failover_last_verified_batch_is_read_only_and_stale_blocks_trading
+
+sources:
+  - key: tsetmc_authenticated_api
+    provider_name: TSETMC
+    organization_fa: شرکت مدیریت فناوری بورس تهران
+    tier: primary_official
+    status: retired_not_called
+    base_url: https://api.tsetmc.com
+    docs_url: https://api.tsetmc.com/docs/
+    authentication: jwt_login_required
+    receipts:
+      - tsetmc_market_watch
+      - tsetmc_indices
+      - tsetmc_eod
+      - tsetmc_client_type
+      - market_valuation
+    verified_contracts:
+      - POST /Account/Login
+      - POST /Instrument/Instrument
+      - POST /Trade/TradeLastDay
+      - POST /Trade/InstTrade
+      - POST /ClientType/ClientTypeByInsCode
+      - POST /Index/IndexB1LastDayLastData
+      - POST /MarketInfo/Threshold
+    allowed_use: disabled
+    notes_fa: این مسیر از چرخه اجرا و معامله حذف شده و هیچ credential آن فراخوانی نمی‌شود.
+
+  - key: tsetmc_public_cdn
+    provider_name: TSETMC_PUBLIC_CDN
+    organization_fa: شرکت مدیریت فناوری بورس تهران
+    tier: primary_official
+    status: live_contract_verified_2026_08_18
+    base_url: https://cdn.tsetmc.com/api/
+    authentication: none_observed
+    receipts:
+      - tsetmc_market_watch
+      - tsetmc_eod
+      - tsetmc_client_type
+      - market_valuation
+    allowed_use: sole_paper_only_market_provider_with_per_batch_and_per_row_provenance
+    independence_key: TSETMC
+    notes_fa: MarketWatch مستقیم در 2026-08-18 بدون credential با 3349 ردیف خام و 968 ورقه IRO1/IRO3 معتبر شد؛ 872 ردیف دارای فیلدهای کامل جلسه برای تصمیم بودند. قطع یا تغییر قرارداد فقط داده قبلی را stale می‌کند و هیچ fallback پنهانی فعال نمی‌شود.
+
+  - key: tse_public_gateway
+    provider_name: TSE_WEB_GATEWAY
+    organization_fa: شرکت بورس اوراق بهادار تهران
+    tier: primary_official_transport_runtime_verified
+    status: retired_not_called
+    base_url: https://webgw.tse.ir/
+    authentication: unknown
+    receipts:
+      - tse_gateway_market_crosscheck
+      - tse_gateway_codal_crosscheck
+    allowed_use: disabled
+    independence_key: TSE
+    notes_fa: پاسخ MarketWatch در 2026-08-17 با HTTP Date رسمی تازه، Cache-Control no-store، 560 ردیف معتبر از 561 و قرارداد هویت/قیمت/دامنه/وضعیت گذشت. هر batch و هر snapshot به provenance مستقیم متصل است؛ نبود SLA عمومی باعث می‌شود contract-test هر چرخه اجباری بماند. این مجوز فقط paper trading است و جایگزین تاریخچه یا بنیادی نیست.
+
+  - key: tindex_secondary
+    provider_name: Tindex
+    organization_fa: تیندکس
+    tier: secondary_aggregator
+    status: docs_verified_host_reachable_token_missing
+    base_url: https://tindex.app
+    docs_url: https://tindex.app/en/developers/
+    authentication: bearer_token
+    documented_free_quota:
+      requests_per_minute: 1
+      successful_requests_per_day: 100
+    receipts:
+      - tindex_market_overview_crosscheck
+      - tindex_symbol_crosscheck
+      - tindex_macro_context
+    allowed_use: secondary_cross_check_only
+    independence_key: TINDEX_TSETMC_DERIVED
+    limitations:
+      - stock_history_max_100_days
+      - fundamentals_and_valuation_not_published_in_api
+      - free_quota_cannot_scan_full_market_each_minute
+    notes_fa: آداپتور امن و محدودشده اضافه شد؛ برای فعال‌سازی TINDEX_API_TOKEN لازم است. داده سهام مشتق از TSETMC است و منبع بنیادی مستقل محسوب نمی‌شود.
+
+  - key: bourseview_commercial
+    provider_name: BourseView_Pouya
+    organization_fa: شرکت پردازش اطلاعات مالی پویا
+    tier: secondary_commercial
+    status: candidate_host_reachable_account_and_contract_required
+    base_url: https://api.bourseview.com
+    authentication: account_subscription_required
+    advertised_coverage:
+      - tsetmc_trading_data
+      - codal_financial_statements
+      - calculated_financial_ratios
+    allowed_use: disabled_until_subscription_contract_endpoint_schema_sla_and_license_are_verified
+    independence_key: POUYA_DERIVED
+    notes_fa: از نظر پوشش بهترین کاندیدای تجاری است، اما داده کدال بازنشرشده منبع upstream مستقل از CODAL نیست و نباید دو رأی بنیادی شمرده شود.
+
+  - key: investats_custom_api
+    provider_name: Investats
+    organization_fa: اینوستتس
+    tier: secondary_commercial
+    status: candidate_vendor_claims_history_and_custom_api_contract_required
+    base_url: https://investats.net/
+    authentication: commercial_contract_required
+    advertised_coverage:
+      - live_market_data
+      - historical_trades
+      - financial_reports
+      - custom_api
+    allowed_use: disabled_until_endpoint_schema_timestamp_units_provenance_sla_license_and_sample_responses_are_verified
+    independence_key: INVESTATS_UNVERIFIED
+    notes_fa: پوشش و API اختصاصی در وب‌سایت عرضه‌کننده اعلام شده، اما قرارداد ماشینی عمومی و SLA در این ممیزی در دسترس نبود؛ هنوز fallback اجرایی نیست.
+
+  - key: api_ir_commercial
+    provider_name: API_IR
+    organization_fa: API.ir
+    tier: secondary_commercial
+    status: current_gateway_checked_stock_contract_absent
+    base_url: https://s.api.ir/
+    docs_url: https://www.api.ir/web-service/%D9%88%D8%A8-%D8%B3%D8%B1%D9%88%DB%8C%D8%B3-%D8%A8%D8%A7%D8%B2%D8%A7%D8%B1-%D8%A8%D9%88%D8%B1%D8%B3-%D8%AA%D9%87%D8%B1%D8%A7%D9%86/
+    authentication: bearer_token_current_gateway_legacy_stock_docs_use_basic
+    allowed_use: disabled_until_current_v2_contract_sla_sample_response_and_license_are_verified
+    notes_fa: پنل و OpenAPI جاری در 2026-08-17 Bearer را تأیید کردند، اما catalog جاری هیچ endpoint بورس/فرابورس ندارد. مستند عمومی بورس مربوط به 2019 و Basic Auth روی دامنه دیگری است؛ توکن جدید تا اعلام endpoint جاری از طرف پشتیبانی نباید روی قرارداد قدیمی امتحان یا وارد موتور بازار شود.
+
+  - key: sourcearena_market_api
+    provider_name: SourceArena
+    organization_fa: سورس آرنا
+    tier: tertiary_commercial
+    status: candidate_rest_docs_verified_test_subscription_not_configured
+    base_url: https://apis.sourcearena.ir/
+    docs_url: https://sourcearena.ir/%D9%88%D8%A8-%D8%B3%D8%B1%D9%88%DB%8C%D8%B3-api-%D8%A8%D9%88%D8%B1%D8%B3-%D9%81%D8%B1%D8%A7%D8%A8%D9%88%D8%B1%D8%B3/
+    authentication: api_key_required
+    observed_account_plan:
+      name: test
+      request_limit: 40
+      observed_at: "2026-08-17"
+    documented_coverage:
+      - live_and_historical_symbols_since_1399
+      - client_type_buy_sell_power
+      - intraday_trades
+      - subscription_websocket
+    allowed_use: disabled_until_current_contract_provenance_freshness_sla_and_license_are_verified
+    notes_fa: پنل SourceArena یک token مستقل از API.ir دارد. اشتراک مشاهده‌شده آزمایشی با سقف 40 درخواست است؛ هیچ خریدی انجام نشد و token در تنظیمات پروژه ذخیره نشد.
+
+  - key: brsapi_market_api
+    provider_name: BrsApi
+    organization_fa: BrsApi
+    tier: secondary_aggregator
+    status: docs_and_static_sample_verified_live_key_required
+    base_url: https://api.brsapi.ir/
+    docs_url: https://brsapi.ir/
+    authentication: api_key_query_parameter
+    documented_fair_use:
+      requests_per_five_minutes: 300
+      locally_enforced_minimum_interval_seconds: 5
+    documented_coverage:
+      - all_tse_and_ifb_symbols_live_board
+      - historical_price_and_trades_by_symbol
+      - historical_daily_client_type_by_symbol
+      - indices_candles_codal_major_shareholders_and_orderbook_products
+    receipts:
+      - brsapi_market_reference
+    allowed_use: reference_only_until_personal_key_live_contract_source_date_units_completeness_and_license_are_verified
+    independence_key: BRSAPI_TSETMC_DERIVED
+    limitations:
+      - all_symbols_contract_exposes_time_but_no_source_date
+      - query_parameter_key_requires_strict_log_redaction
+      - provider_prohibits_proxy_and_api_resale_usage
+      - not_an_independent_vote_from_tsetmc
+    notes_fa: مستندات و نمونه JSON در 2026-08-17 بررسی شد؛ نمونه ثابت 1188 ردیف داشت. کلید نمونه عمومی برای endpoint زنده HTTP 401 داد، بنابراین بدون کلید شخصی هیچ ادعای تازگی نداریم. آداپتور fail-closed، محدود به یک درخواست در پنج ثانیه و فقط مرجع است؛ تاریخچه تا اجرای contract-test زنده وارد EOD رسمی نمی‌شود.
+
+  - key: persianapi_market
+    provider_name: PersianAPI
+    organization_fa: پرشین API
+    tier: tertiary_commercial
+    status: candidate_openapi_docs_verified_token_missing
+    base_url: https://studio.persianapi.com/
+    docs_url: https://workspace.persianapi.com/ps-15660528e0
+    authentication: bearer_token
+    documented_coverage:
+      - live_tse_ifb_symbols
+      - market_indices
+      - p_e_p_b_p_s_ttm_and_financial_fields
+    documented_stock_refresh_seconds: 60
+    allowed_use: disabled_until_token_contract_test_timestamp_units_provenance_sla_and_license_are_verified
+
+  - key: tse_market_data_contract_registry
+    provider_name: tse-market-data-community-registry
+    organization_fa: مستندسازی جامعه‌محور endpointهای بازار سرمایه
+    tier: documentation_only
+    status: current_reference_observed_no_sla
+    base_url: https://github.com/BabakEslami/tse-market-data
+    authentication: none
+    allowed_use: endpoint_contract_tests_only_not_a_data_vote
+    notes_fa: خود پروژه نبود ارتباط رسمی و نبود SLA را اعلام می‌کند؛ برای CDN و webgw مرجع تست است و منبع مستقل داده نیست.
+
+  - key: majidapi_market
+    provider_name: MajidAPI
+    organization_fa: مجید API
+    tier: tertiary_community
+    status: candidate_free_no_sla_or_provenance_verified
+    base_url: https://api.majidapi.ir/
+    authentication: none_observed
+    allowed_use: disabled
+
+  - key: codal_official
+    provider_name: CODAL_SEO
+    organization_fa: سامانه اطلاع‌رسانی ناشران سازمان بورس و اوراق بهادار
+    tier: primary_official
+    status: public_site_verified_api_contract_unverified
+    base_url: https://codal.ir/
+    authentication: unknown_for_machine_ingestion
+    receipts:
+      - codal_disclosures
+      - codal_xbrl_financials
+    allowed_use: public_manual_verification_only_until_api_contract_is_verified
+    notes_fa: صفحه رسمی جستجوی اطلاعیه و XBRL تأیید شد؛ scraping یا API حدسی مجاز نیست.
+
+  - key: tse_official
+    provider_name: TSE
+    organization_fa: شرکت بورس اوراق بهادار تهران
+    tier: primary_official
+    status: public_site_verified_machine_contract_unverified
+    base_url: https://www.tse.ir/
+    receipts:
+      - tse_market_notices
+      - tse_symbol_caution_status
+    allowed_use: manual_cross_check_only
+
+  - key: ifb_official
+    provider_name: IFB
+    organization_fa: فرابورس ایران
+    tier: primary_official
+    status: unreachable_during_2026_08_17_audit
+    base_url: https://www.ifb.ir/
+    allowed_use: disabled
+
+  - key: cbi_official
+    provider_name: CBI
+    organization_fa: بانک مرکزی جمهوری اسلامی ایران
+    tier: primary_official_macro
+    status: browser_path_unverified_during_2026_08_17_audit
+    base_url: https://www.cbi.ir/
+    receipts:
+      - cbi_macro_rates
+    allowed_use: disabled_until_contract_verified
+
+  - key: ime_official
+    provider_name: IME
+    organization_fa: بورس کالای ایران
+    tier: primary_official_commodity
+    status: browser_path_unverified_during_2026_08_17_audit
+    base_url: https://www.ime.co.ir/
+    receipts:
+      - ime_commodity_prices
+    allowed_use: disabled_until_contract_verified
+
+  - key: servix_macro
+    provider_name: Servix
+    organization_fa: سرویکس
+    tier: secondary_commercial_macro
+    status: docs_and_pricing_verified_token_missing
+    base_url: https://servix.cc/
+    receipts:
+      - servix_currency_gold_context
+    allowed_use: macro_regime_context_only
+    independence_key: SERVIX
+    notes_fa: ارز، طلا، سکه و رمزارز؛ منبع بنیادی شرکت یا قیمت سهام نیست.
+
+  - key: arzhaam_macro
+    provider_name: Arzhaam
+    organization_fa: ارزهام
+    tier: secondary_macro
+    status: docs_verified_token_missing
+    base_url: https://arzhaam.ir/
+    docs_url: https://arzhaam.ir/docs
+    receipts:
+      - arzhaam_currency_gold_context
+    allowed_use: macro_regime_context_only
+    independence_key: ARZHAAM

@@ -9,7 +9,14 @@ def test_e2e_signal_evaluation_to_order_placement():
     db = SyncSessionLocal()
     try:
         portfolio = db.query(Portfolio).filter(Portfolio.is_active == True).first()
-        assert portfolio is not None
+        if portfolio is None:
+            portfolio = Portfolio(
+                id="port_e2e_isolated", name="isolated e2e", mode="paper",
+                cash=100_000_000_000.0, initial_cash=100_000_000_000.0,
+                realized_pnl=0.0, kill_switch_active=False, is_active=True,
+            )
+            db.add(portfolio)
+            db.commit()
         
         # Verify initial portfolio NAV invariant
         assert portfolio.cash > 0

@@ -3,7 +3,7 @@ import uuid
 import enum
 from datetime import datetime, date
 from sqlalchemy import (
-    String, Float, Integer, Boolean, DateTime, Date, Text,
+    String, Float, Integer, BigInteger, Boolean, DateTime, Date, Text,
     ForeignKey, Index, UniqueConstraint, JSON
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -91,7 +91,7 @@ class EODBar(Base):
     yesterday_price: Mapped[float] = mapped_column(Float)
     
     # Volume & Trades
-    volume: Mapped[int] = mapped_column(Integer)
+    volume: Mapped[int] = mapped_column(BigInteger)
     value: Mapped[float] = mapped_column(Float)
     trade_count: Mapped[int] = mapped_column(Integer)
     
@@ -106,6 +106,10 @@ class EODBar(Base):
     # Timestamps
     available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    source_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    batch_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    trust_tier: Mapped[str] = mapped_column(String(32), default="UNVERIFIED")
+    trade_eligible: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
 
     instrument: Mapped[Instrument] = relationship("Instrument", back_populates="eod_bars")
 
@@ -128,18 +132,123 @@ class MarketSnapshot(Base):
     low_price: Mapped[float] = mapped_column(Float)
     yesterday_price: Mapped[float] = mapped_column(Float)
     
-    volume: Mapped[int] = mapped_column(Integer)
+    volume: Mapped[int] = mapped_column(BigInteger)
     value: Mapped[float] = mapped_column(Float)
     trade_count: Mapped[int] = mapped_column(Integer)
     
     allowed_min: Mapped[float] = mapped_column(Float)
     allowed_max: Mapped[float] = mapped_column(Float)
-    state: Mapped[str] = mapped_column(String(32), default="A")  # A = Allowed, I = Suspended, etc.
+    state: Mapped[str] = mapped_column(String(32), default="UNKNOWN")  # Provider state; unknown must fail closed.
 
     available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    source_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    batch_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    trust_tier: Mapped[str] = mapped_column(String(32), default="UNVERIFIED")
+    trade_eligible: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
 
     instrument: Mapped[Instrument] = relationship("Instrument", back_populates="snapshots")
+
+
+class DataSourceReceipt(Base):
+    """Persistent proof of a provider attempt/success used by fail-closed trade gates."""
+    __tablename__ = "data_source_receipt"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    source_key: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    source_kind: Mapped[str] = mapped_column(String(32), index=True)
+    provider_name: Mapped[str] = mapped_column(String(128))
+    provider_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    mode: Mapped[str] = mapped_column(String(16), default="official")
+    status: Mapped[str] = mapped_column(String(24), default="UNAVAILABLE", index=True)
+    schema_version: Mapped[str] = mapped_column(String(64), default="unverified")
+    record_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+
+class MarketDataBatch(Base):
+    """Immutable provider response envelope used to bind rows to provenance.
+
+    Reference-only transports are deliberately stored outside the canonical
+    execution tables.  Promotion to ``MarketSnapshot`` is a separate,
+    contract-checked operation and cannot happen merely because another global
+    receipt happens to be healthy.
+    """
+    __tablename__ = "market_data_batch"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    source_key: Mapped[str] = mapped_column(String(64), index=True)
+    provider_name: Mapped[str] = mapped_column(String(128))
+    source_timestamp: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, index=True)
+    mode: Mapped[str] = mapped_column(String(24), default="reference_only", index=True)
+    trust_tier: Mapped[str] = mapped_column(String(32), default="REFERENCE", index=True)
+    trade_eligible: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    schema_version: Mapped[str] = mapped_column(String(64), default="unverified")
+    row_count: Mapped[int] = mapped_column(Integer, default=0)
+    complete: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+
+class ReferenceMarketObservation(Base):
+    """Normalized non-execution market row with immutable batch provenance."""
+    __tablename__ = "reference_market_observation"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    batch_id: Mapped[str] = mapped_column(String(36), ForeignKey("market_data_batch.id"), index=True)
+    source_key: Mapped[str] = mapped_column(String(64), index=True)
+    source_instrument_code: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    isin: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    ticker: Mapped[str] = mapped_column(String(64), index=True)
+    name_fa: Mapped[str] = mapped_column(String(255))
+    market: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source_timestamp: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    last_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    close_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    first_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    high_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    low_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    yesterday_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    allowed_min: Mapped[float | None] = mapped_column(Float, nullable=True)
+    allowed_max: Mapped[float | None] = mapped_column(Float, nullable=True)
+    volume: Mapped[int] = mapped_column(BigInteger, default=0)
+    value: Mapped[float] = mapped_column(Float, default=0.0)
+    trade_count: Mapped[int] = mapped_column(Integer, default=0)
+    state: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    pe: Mapped[float | None] = mapped_column(Float, nullable=True)
+    eps: Mapped[float | None] = mapped_column(Float, nullable=True)
+    market_cap: Mapped[float | None] = mapped_column(Float, nullable=True)
+    raw_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("batch_id", "source_instrument_code", name="uq_reference_batch_instrument"),
+        Index("ix_reference_source_ticker", "source_key", "ticker"),
+    )
+
+
+class MarketIndexSnapshot(Base):
+    """Canonical official TSETMC index observation with provider timestamp."""
+    __tablename__ = "market_index_snapshot"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    source_index_code: Mapped[str] = mapped_column(String(64), index=True)
+    name_fa: Mapped[str] = mapped_column(String(160), index=True)
+    source_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    value: Mapped[float] = mapped_column(Float)
+    change_pct: Mapped[float] = mapped_column(Float)
+    change_value: Mapped[float] = mapped_column(Float)
+    advancers: Mapped[int] = mapped_column(Integer, default=0)
+    decliners: Mapped[int] = mapped_column(Integer, default=0)
+    unchanged: Mapped[int] = mapped_column(Integer, default=0)
+    total_constituents: Mapped[int] = mapped_column(Integer, default=0)
+    ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+    __table_args__ = (
+        UniqueConstraint("source_index_code", "source_timestamp", name="uq_index_source_timestamp"),
+    )
 
 
 class OrderBookSnapshot(Base):
@@ -170,21 +279,25 @@ class ClientTypeSnapshot(Base):
     
     # Individual / Real (حقیقی)
     real_buy_count: Mapped[int] = mapped_column(Integer)
-    real_buy_volume: Mapped[int] = mapped_column(Integer)
+    real_buy_volume: Mapped[int] = mapped_column(BigInteger)
     real_buy_value: Mapped[float] = mapped_column(Float)
     real_sell_count: Mapped[int] = mapped_column(Integer)
-    real_sell_volume: Mapped[int] = mapped_column(Integer)
+    real_sell_volume: Mapped[int] = mapped_column(BigInteger)
     real_sell_value: Mapped[float] = mapped_column(Float)
     
     # Legal / Institutional (حقوقی)
     legal_buy_count: Mapped[int] = mapped_column(Integer)
-    legal_buy_volume: Mapped[int] = mapped_column(Integer)
+    legal_buy_volume: Mapped[int] = mapped_column(BigInteger)
     legal_buy_value: Mapped[float] = mapped_column(Float)
     legal_sell_count: Mapped[int] = mapped_column(Integer)
-    legal_sell_volume: Mapped[int] = mapped_column(Integer)
+    legal_sell_volume: Mapped[int] = mapped_column(BigInteger)
     legal_sell_value: Mapped[float] = mapped_column(Float)
 
     available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    source_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    batch_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    trust_tier: Mapped[str] = mapped_column(String(32), default="UNVERIFIED")
+    trade_eligible: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
 
     __table_args__ = (
         UniqueConstraint("instrument_id", "trading_date", name="uq_client_type_inst_date"),
@@ -306,8 +419,8 @@ class PublishedSignal(Base):
     as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     horizon: Mapped[str] = mapped_column(String(16), default="5d")  # 1d, 3d, 5d, 10d, 20d
     direction: Mapped[str] = mapped_column(String(16), default="long")
-    actionable: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
-    grade: Mapped[str] = mapped_column(String(8), default="A")  # A+, A, B, C
+    actionable: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    grade: Mapped[str] = mapped_column(String(8), default="C")  # A+, A, B, C
     
     # 4 distinct quantitative outputs
     opportunity_score: Mapped[float] = mapped_column(Float, index=True)  # 0-100
@@ -324,19 +437,20 @@ class PublishedSignal(Base):
     invalidation: Mapped[dict] = mapped_column(JSON)    # {"price": 9650, "type": "structure_atr", "reason_fa": "..."}
     exit_plan: Mapped[dict] = mapped_column(JSON)       # {"type": "...", "targets": [10800, 11200], "time_stop_sessions": 5}
     
-    liquidity_score: Mapped[float] = mapped_column(Float, default=80.0)
-    fill_probability_score: Mapped[float] = mapped_column(Float, default=80.0)
-    data_quality: Mapped[float] = mapped_column(Float, default=95.0)
-    regime: Mapped[str] = mapped_column(String(32), default="risk_on")
+    liquidity_score: Mapped[float] = mapped_column(Float, default=0.0)
+    fill_probability_score: Mapped[float] = mapped_column(Float, default=0.0)
+    data_quality: Mapped[float] = mapped_column(Float, default=0.0)
+    regime: Mapped[str] = mapped_column(String(32), default="unknown")
     
     # Explanation
     strategy_votes: Mapped[list[dict]] = mapped_column(JSON)
     top_reasons_fa: Mapped[list[str]] = mapped_column(JSON)
     risk_flags_fa: Mapped[list[str]] = mapped_column(JSON)
+    decision_components: Mapped[dict] = mapped_column(JSON, default=dict)
     
     # Versions & Expiry
     model_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    strategy_version: Mapped[str] = mapped_column(String(64), default="2026.08.1")
+    strategy_version: Mapped[str] = mapped_column(String(512), default="UNVERSIONED")
     calibration_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -367,7 +481,7 @@ class BacktestRun(Base):
     trade_count: Mapped[int] = mapped_column(Integer, default=0)
     config_json: Mapped[dict] = mapped_column(JSON)
     metrics_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    status: Mapped[str] = mapped_column(String(32), default="COMPLETED")
+    status: Mapped[str] = mapped_column(String(32), default="PENDING")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
     trades: Mapped[list["BacktestTrade"]] = relationship("BacktestTrade", back_populates="backtest", cascade="all, delete-orphan")
@@ -415,6 +529,22 @@ class Portfolio(Base):
     closed_trades: Mapped[list["ClosedTradeHistory"]] = relationship("ClosedTradeHistory", back_populates="portfolio")
 
 
+class PaperCampaign(Base):
+    """Versioned one-month paper-trading campaign; prior portfolios remain archived."""
+    __tablename__ = "paper_campaign"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    portfolio_id: Mapped[str] = mapped_column(String(36), ForeignKey("portfolio.id"), unique=True, index=True)
+    name_fa: Mapped[str] = mapped_column(String(160))
+    status: Mapped[str] = mapped_column(String(32), default="READY_BLOCKED_DATA", index=True)
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    initial_capital_rials: Mapped[float] = mapped_column(Float)
+    timezone_name: Mapped[str] = mapped_column(String(64), default="Asia/Tehran")
+    config_snapshot: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
 class Position(Base):
     __tablename__ = "position"
 
@@ -428,10 +558,10 @@ class Position(Base):
     stop_loss: Mapped[float | None] = mapped_column(Float, nullable=True)
     target_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     total_invested_rials: Mapped[float] = mapped_column(Float, default=0.0)
-    risk_pct: Mapped[float] = mapped_column(Float, default=0.5)
-    risk_reward_ratio: Mapped[str] = mapped_column(String(32), default="1:2.0")
-    expected_days_to_target: Mapped[int] = mapped_column(Integer, default=5)
-    market_regime: Mapped[str] = mapped_column(String(32), default="risk_on")
+    risk_pct: Mapped[float] = mapped_column(Float, default=0.0)
+    risk_reward_ratio: Mapped[str] = mapped_column(String(32), default="UNKNOWN")
+    expected_days_to_target: Mapped[int] = mapped_column(Integer, default=0)
+    market_regime: Mapped[str] = mapped_column(String(32), default="unknown")
     decision_method: Mapped[str] = mapped_column(String(128), default="")
     entry_reason_fa: Mapped[str] = mapped_column(Text, default="")
     risk_flags_fa: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
@@ -457,6 +587,9 @@ class BrokerOrder(Base):
     status: Mapped[str] = mapped_column(String(32), default="PENDING")  # PENDING, SUBMITTED, PARTIALLY_FILLED, FILLED, CANCELLED, REJECTED
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    last_evaluated_snapshot_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     portfolio: Mapped[Portfolio] = relationship("Portfolio", back_populates="orders")
 
@@ -477,13 +610,13 @@ class PaperTradeLog(Base):
     exit_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     holding_hours: Mapped[float] = mapped_column(Float, default=0.0)
     holding_days: Mapped[float] = mapped_column(Float, default=0.0)
-    expected_days_to_target: Mapped[int] = mapped_column(Integer, default=5)
-    market_regime: Mapped[str] = mapped_column(String(32), default="risk_on")
+    expected_days_to_target: Mapped[int] = mapped_column(Integer, default=0)
+    market_regime: Mapped[str] = mapped_column(String(32), default="unknown")
     gross_pnl: Mapped[float] = mapped_column(Float, default=0.0)
     net_pnl: Mapped[float] = mapped_column(Float, default=0.0)
     return_pct: Mapped[float] = mapped_column(Float, default=0.0)
-    risk_pct: Mapped[float] = mapped_column(Float, default=0.5)
-    risk_reward_ratio: Mapped[float] = mapped_column(Float, default=2.0)
+    risk_pct: Mapped[float] = mapped_column(Float, default=0.0)
+    risk_reward_ratio: Mapped[float] = mapped_column(Float, default=0.0)
     decision_method: Mapped[str] = mapped_column(String(128), default="")
     features_at_entry: Mapped[dict] = mapped_column(JSON, default=dict)
     features_at_exit: Mapped[dict | None] = mapped_column(JSON, nullable=True)
@@ -577,7 +710,7 @@ class CorporateAction(Base):
     cash_per_share: Mapped[float] = mapped_column(Float, default=0.0)
     published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     effective_date: Mapped[date] = mapped_column(Date)
-    is_processed: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_processed: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class DecisionAudit(Base):
@@ -587,14 +720,38 @@ class DecisionAudit(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
     symbol: Mapped[str] = mapped_column(String(64), index=True)
     signal_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    model_version: Mapped[str] = mapped_column(String(64), default="v2.4-isotonic-brier")
-    dataset_version: Mapped[str] = mapped_column(String(64), default="tse-pit-2026-08")
+    model_version: Mapped[str] = mapped_column(String(64), default="UNFITTED")
+    dataset_version: Mapped[str] = mapped_column(String(64), default="UNVERSIONED")
     risk_policy_version: Mapped[str] = mapped_column(String(32), default="RP-15DD-1RISK")
     decision: Mapped[str] = mapped_column(String(32))  # APPROVED, REJECTED_RISK, REJECTED_SECTOR_CAP, REJECTED_LIQUIDITY
     decision_reason_fa: Mapped[str] = mapped_column(Text, default="")
     opportunity_score: Mapped[float] = mapped_column(Float, default=0.0)
     p_profit: Mapped[float] = mapped_column(Float, default=0.0)
     as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class CalibrationArtifact(Base):
+    """Database-backed, JSON-only probability calibration curve with reversible activation."""
+    __tablename__ = "calibration_artifact"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    version: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    method: Mapped[str] = mapped_column(String(32), default="isotonic")
+    status: Mapped[str] = mapped_column(String(24), default="CANDIDATE", index=True)
+    portfolio_id: Mapped[str] = mapped_column(String(36), ForeignKey("portfolio.id"), index=True)
+    dataset_fingerprint: Mapped[str] = mapped_column(String(64))
+    train_sample_size: Mapped[int] = mapped_column(Integer)
+    oos_sample_size: Mapped[int] = mapped_column(Integer)
+    observed_regimes: Mapped[list[str]] = mapped_column(JSON, default=list)
+    x_thresholds: Mapped[list[float]] = mapped_column(JSON, default=list)
+    y_thresholds: Mapped[list[float]] = mapped_column(JSON, default=list)
+    brier_before: Mapped[float] = mapped_column(Float)
+    brier_after: Mapped[float] = mapped_column(Float)
+    ece_after: Mapped[float | None] = mapped_column(Float, nullable=True)
+    rejection_reason_fa: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    approved_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
 
 # ==========================================
@@ -667,11 +824,11 @@ class ClosedTradeHistory(Base):
 
     strategy_id: Mapped[str] = mapped_column(String(64), index=True)
     strategy_name_fa: Mapped[str] = mapped_column(String(128), default="")
-    strategy_version: Mapped[str] = mapped_column(String(32), default="v1.0", index=True)
-    model_version: Mapped[str] = mapped_column(String(64), default="v2.4-isotonic-brier", index=True)
+    strategy_version: Mapped[str] = mapped_column(String(32), default="UNVERSIONED", index=True)
+    model_version: Mapped[str] = mapped_column(String(64), default="UNFITTED", index=True)
     risk_policy_version: Mapped[str] = mapped_column(String(32), default="POL-TSE-2026-V2.5")
     market_rules_version: Mapped[str] = mapped_column(String(32), default="TSE-RULES-2026-V1.0")
-    dataset_version: Mapped[str] = mapped_column(String(64), default="tse-pit-2026-08")
+    dataset_version: Mapped[str] = mapped_column(String(64), default="UNVERSIONED")
 
     signal_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     decision_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -700,7 +857,7 @@ class ClosedTradeHistory(Base):
     net_return_pct: Mapped[float] = mapped_column(Float, default=0.0)
 
     initial_risk_amount: Mapped[float] = mapped_column(Float, default=0.0)
-    initial_risk_pct_nav: Mapped[float] = mapped_column(Float, default=0.35)
+    initial_risk_pct_nav: Mapped[float] = mapped_column(Float, default=0.0)
     realized_R: Mapped[float] = mapped_column(Float, default=0.0)
     MFE: Mapped[float] = mapped_column(Float, default=0.0)  # Max Favorable Excursion %
     MAE: Mapped[float] = mapped_column(Float, default=0.0)  # Max Adverse Excursion %
@@ -712,14 +869,14 @@ class ClosedTradeHistory(Base):
 
     exit_reason: Mapped[str] = mapped_column(String(32), default="MANUAL_EXIT", index=True)
     exit_reason_detail: Mapped[str] = mapped_column(String(255), default="")
-    market_regime_at_entry: Mapped[str] = mapped_column(String(32), default="risk_on", index=True)
-    market_regime_at_exit: Mapped[str] = mapped_column(String(32), default="risk_on")
+    market_regime_at_entry: Mapped[str] = mapped_column(String(32), default="unknown", index=True)
+    market_regime_at_exit: Mapped[str] = mapped_column(String(32), default="unknown")
 
-    portfolio_nav_at_entry: Mapped[float] = mapped_column(Float, default=100_000_000_000.0)
-    portfolio_nav_at_exit: Mapped[float] = mapped_column(Float, default=100_000_000_000.0)
-    position_weight_at_entry: Mapped[float] = mapped_column(Float, default=0.08)
+    portfolio_nav_at_entry: Mapped[float] = mapped_column(Float, default=0.0)
+    portfolio_nav_at_exit: Mapped[float] = mapped_column(Float, default=0.0)
+    position_weight_at_entry: Mapped[float] = mapped_column(Float, default=0.0)
 
-    outcome_status: Mapped[str] = mapped_column(String(16), default="WIN", index=True)
+    outcome_status: Mapped[str] = mapped_column(String(16), default="BREAKEVEN", index=True)
     reason_fa: Mapped[str] = mapped_column(Text, default="")
     lesson_fa: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
@@ -756,10 +913,10 @@ class TradePostMortem(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
     trade_id: Mapped[str] = mapped_column(String(36), ForeignKey("closed_trade_history.id"), unique=True, index=True)
-    entry_efficiency: Mapped[float] = mapped_column(Float, default=0.95)
-    exit_efficiency: Mapped[float] = mapped_column(Float, default=0.88)
-    process_quality_score: Mapped[float] = mapped_column(Float, default=90.0)
-    outcome_vs_process_type: Mapped[str] = mapped_column(String(32), default="GOOD_PROCESS_WIN")  # GOOD_PROCESS_WIN, GOOD_PROCESS_LOSS, BAD_PROCESS_WIN, BAD_PROCESS_LOSS
+    entry_efficiency: Mapped[float] = mapped_column(Float, default=0.0)
+    exit_efficiency: Mapped[float] = mapped_column(Float, default=0.0)
+    process_quality_score: Mapped[float] = mapped_column(Float, default=0.0)
+    outcome_vs_process_type: Mapped[str] = mapped_column(String(32), default="UNASSESSED")  # GOOD_PROCESS_WIN, GOOD_PROCESS_LOSS, BAD_PROCESS_WIN, BAD_PROCESS_LOSS
     what_worked_fa: Mapped[str] = mapped_column(Text, default="")
     what_failed_fa: Mapped[str] = mapped_column(Text, default="")
     entry_quality_fa: Mapped[str] = mapped_column(Text, default="")
@@ -782,7 +939,7 @@ class StructuredLesson(Base):
     category: Mapped[str] = mapped_column(String(32), index=True)  # ENTRY, EXIT, RISK, EXECUTION, TECHNICAL, FUNDAMENTAL, CODAL, LIQUIDITY, REGIME, POSITION_SIZE
     finding_fa: Mapped[str] = mapped_column(Text)
     evidence_data: Mapped[dict] = mapped_column(JSON, default=dict)
-    confidence_pct: Mapped[float] = mapped_column(Float, default=85.0)
+    confidence_pct: Mapped[float] = mapped_column(Float, default=0.0)
     action_candidate_fa: Mapped[str] = mapped_column(Text, default="")
     requires_validation: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
@@ -796,17 +953,15 @@ class ExperimentProposal(Base):
     source_lesson_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     strategy_key: Mapped[str] = mapped_column(String(64), index=True)
     strategy_name_fa: Mapped[str] = mapped_column(String(128), default="")
-    champion_version: Mapped[str] = mapped_column(String(32), default="v1.0")
-    challenger_version: Mapped[str] = mapped_column(String(32), default="v1.1")
+    champion_version: Mapped[str] = mapped_column(String(32), default="UNVERSIONED")
+    challenger_version: Mapped[str] = mapped_column(String(32), default="UNVERSIONED-CHALLENGER")
     status: Mapped[str] = mapped_column(String(32), default="PROPOSED", index=True)  # PROPOSED, BACKTESTING, REJECTED, OOS_TESTING, PAPER_CHALLENGER, APPROVED, PROMOTED
     hypothesis_fa: Mapped[str] = mapped_column(Text)
     parameter_changes: Mapped[dict] = mapped_column(JSON, default=dict)
     backtest_metrics: Mapped[dict] = mapped_column(JSON, default=dict)
     oos_metrics: Mapped[dict] = mapped_column(JSON, default=dict)
-    sample_sufficiency: Mapped[str] = mapped_column(String(32), default="EARLY_EVIDENCE")
+    sample_sufficiency: Mapped[str] = mapped_column(String(32), default="INSUFFICIENT_SAMPLE")
     rejection_reason_fa: Mapped[str | None] = mapped_column(Text, nullable=True)
     approved_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
     promoted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
-
-

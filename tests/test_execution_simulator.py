@@ -105,3 +105,39 @@ def test_evaluate_position_exit_stop_loss():
     assert action == "STOP_LOSS"
     assert exit_ratio == 1.0
     assert exit_price == 4750.0
+
+
+def test_limit_order_waits_when_price_never_touches_limit():
+    sim = ExecutionSimulator()
+    order = BrokerOrder(
+        id="ord_wait", portfolio_id="port_1", symbol="فولاد", side="BUY",
+        order_type="LIMIT", price=5000.0, quantity=1000, filled_quantity=0, status="SUBMITTED",
+    )
+    bar: ExecutionBar = {
+        "trading_date": "2026-08-17", "open": 5200.0, "high": 5300.0,
+        "low": 5100.0, "close": 5250.0, "volume": 1_000_000,
+        "value": 5_250_000_000.0, "allowed_min": 4900.0, "allowed_max": 5400.0,
+    }
+    fill, message = sim.simulate_order_fill(order, bar)
+    assert fill is None
+    assert order.status == "SUBMITTED"
+    assert "در صف" in message
+
+
+def test_partial_fill_uses_remaining_quantity_only():
+    sim = ExecutionSimulator()
+    order = BrokerOrder(
+        id="ord_partial", portfolio_id="port_1", symbol="فولاد", side="SELL",
+        order_type="TRIM", price=5000.0, quantity=1000, filled_quantity=400,
+        status="PARTIALLY_FILLED",
+    )
+    bar: ExecutionBar = {
+        "trading_date": "2026-08-17", "open": 5050.0, "high": 5100.0,
+        "low": 4950.0, "close": 5030.0, "volume": 100_000,
+        "value": 503_000_000.0, "allowed_min": 4750.0, "allowed_max": 5250.0,
+    }
+    fill, _ = sim.simulate_order_fill(order, bar)
+    assert fill is not None
+    assert fill.quantity == 600
+    assert order.filled_quantity == 1000
+    assert order.status == "FILLED"

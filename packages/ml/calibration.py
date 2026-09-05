@@ -16,18 +16,18 @@ LABEL_CONTRACT = {
 
 # ── 2. Locked Champion Model Metadata ──
 CHAMPION_MODEL_METADATA = {
-    "model_id": "isotonic_v2.4_champion",
+    "model_id": None,
     "model_type": "Isotonic Regression + Prior Shrinkage",
-    "version": "v2.4.0",
-    "training_universe": "TSE Top 150 Liquid Stocks (Point-in-Time)",
+    "version": None,
+    "training_universe": None,
     "calibration_method": "isotonic_regression",
-    "brier_score": 0.142,
-    "expected_calibration_error": 0.048,
-    "log_loss": 0.461,
+    "brier_score": None,
+    "expected_calibration_error": None,
+    "log_loss": None,
     "min_sample_threshold": 1000,
-    "governance_status": "LOCKED_CHAMPION",
-    "governance_status_fa": "مدل قهرمان قفل‌شده (ایمن در برابر بیش‌برازش روزانه)",
-    "effective_date": "1405/05/25",
+    "governance_status": "NOT_FITTED",
+    "governance_status_fa": "مدل کالیبراسیون معتبر هنوز با داده خارج از نمونه برازش نشده است",
+    "effective_date": None,
 }
 
 
@@ -79,11 +79,43 @@ class SignalProbabilityCalibrator:
         self.is_fitted = True
         return self
 
+    @classmethod
+    def from_isotonic_curve(
+        cls,
+        x_thresholds: list[float],
+        y_thresholds: list[float],
+        *,
+        model_version: str,
+    ) -> "SignalProbabilityCalibrator":
+        """Restore a validated JSON curve without executing a pickle/joblib artifact."""
+        if len(x_thresholds) < 2 or len(x_thresholds) != len(y_thresholds):
+            raise ValueError("Stored calibration curve is malformed.")
+        if any(b <= a for a, b in zip(x_thresholds, x_thresholds[1:])):
+            raise ValueError("Calibration x thresholds must be strictly increasing.")
+        if any(value < 0.0 or value > 1.0 for value in y_thresholds):
+            raise ValueError("Calibration probabilities must be within [0, 1].")
+        instance = cls(method="isotonic")
+        curve = IsotonicRegression(out_of_bounds="clip")
+        curve.fit(np.asarray(x_thresholds, dtype=float), np.asarray(y_thresholds, dtype=float))
+        instance.calibrator = curve
+        instance.is_fitted = True
+        instance.model_version = model_version
+        return instance
+
+    def export_isotonic_curve(self) -> tuple[list[float], list[float]]:
+        if not self.is_fitted or self.method != "isotonic" or self.calibrator is None:
+            raise RuntimeError("Only a fitted isotonic calibrator can be exported.")
+        return (
+            [float(value) for value in self.calibrator.X_thresholds_],
+            [float(value) for value in self.calibrator.y_thresholds_],
+        )
+
     def predict_p_profit(self, raw_score: float) -> float:
         """Transforms a raw score into a calibrated probability of profit (0.0 to 1.0)."""
         if not self.is_fitted or self.calibrator is None:
-            # Calibrated sigmoid prior mapping based on TSE empirical baseline
-            return float(np.clip(0.50 + (raw_score - 0.50) * 0.38, 0.25, 0.82))
+            raise RuntimeError(
+                "Probability calibration is unavailable until an out-of-sample calibrator is fitted."
+            )
 
         score_arr = np.array([raw_score])
         if self.method == "isotonic":
@@ -96,17 +128,17 @@ class SignalProbabilityCalibrator:
         return float(np.clip(shrunk_p, 0.10, 0.90))
 
 
-def calculate_brier_score(y_prob: np.ndarray, y_true: np.ndarray) -> float:
+def calculate_brier_score(y_prob: np.ndarray, y_true: np.ndarray) -> float | None:
     """Computes Brier Score: Mean squared error of calibrated probability vs outcome."""
     if len(y_prob) == 0:
-        return 0.142
+        return None
     return float(np.mean((y_prob - y_true) ** 2))
 
 
-def calculate_ece(y_prob: np.ndarray, y_true: np.ndarray, n_bins: int = 5) -> float:
+def calculate_ece(y_prob: np.ndarray, y_true: np.ndarray, n_bins: int = 5) -> float | None:
     """Computes Expected Calibration Error (ECE)."""
     if len(y_prob) == 0:
-        return 0.048
+        return None
     bins = np.linspace(0.0, 1.0, n_bins + 1)
     binids = np.digitize(y_prob, bins) - 1
 
@@ -123,13 +155,8 @@ def calculate_ece(y_prob: np.ndarray, y_true: np.ndarray, n_bins: int = 5) -> fl
 
 def generate_reliability_curve(y_prob: np.ndarray | None = None, y_true: np.ndarray | None = None, n_bins: int = 5) -> list[dict]:
     """Generates reliability curve data points for charts."""
-    if y_prob is None or len(y_prob) < 10:
-        return [
-            {"bin_center": 0.20, "empirical_prob": 0.21, "ideal_prob": 0.20, "sample_count": 140},
-            {"bin_center": 0.40, "empirical_prob": 0.38, "ideal_prob": 0.40, "sample_count": 285},
-            {"bin_center": 0.60, "empirical_prob": 0.59, "ideal_prob": 0.60, "sample_count": 340},
-            {"bin_center": 0.80, "empirical_prob": 0.77, "ideal_prob": 0.80, "sample_count": 235},
-        ]
+    if y_prob is None or y_true is None or len(y_prob) < 10 or len(y_prob) != len(y_true):
+        return []
     prob_true, prob_pred = calibration_curve(y_true, y_prob, n_bins=n_bins, strategy="uniform")
     out = []
     for pt, pp in zip(prob_true, prob_pred):

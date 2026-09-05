@@ -32,9 +32,21 @@ class LiveBrokerGateway:
         self.adapter = adapter
 
     def is_live_execution_allowed(self) -> bool:
+        configured_adapter = (settings.broker_adapter or "").strip()
+        adapter_names = set()
+        if self.adapter is not None:
+            adapter_cls = self.adapter.__class__
+            adapter_names = {
+                adapter_cls.__name__,
+                f"{adapter_cls.__module__}.{adapter_cls.__name__}",
+            }
         return (
             settings.trading_mode == "live"
             and settings.live_trading_enabled is True
+            and bool(configured_adapter)
+            and configured_adapter in adapter_names
+            and bool(settings.broker_credentials)
+            and settings.risk_kill_switch_armed is True
             and self.adapter is not None
         )
 

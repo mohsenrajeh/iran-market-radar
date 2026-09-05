@@ -32,7 +32,7 @@ import {
   Check,
 } from "lucide-react";
 import { getStrategyFa, getStrategyShortFa, getIndicatorFa, getRegimeFa, getExitReasonFa } from "./translations";
-import { toPersianDigits } from "../lib/formatters";
+import { formatDecimalFa, formatNumberFa, formatPercentFa, formatRatioFa, formatToman, toPersianDigits } from "../lib/formatters";
 
 interface PositionItem {
   id: string;
@@ -46,14 +46,14 @@ interface PositionItem {
   target_price: number | null;
   total_invested_rials: number;
   total_invested_tomans: number;
-  risk_pct: number;
-  risk_reward_ratio: number | string;
-  expected_days_to_target: number;
+  risk_pct: number | null;
+  risk_reward_ratio: number | string | null;
+  expected_days_to_target: number | null;
   days_open: number;
   market_regime: string;
   market_regime_fa: string;
-  decision_method: string;
-  entry_reason_fa: string;
+  decision_method: string | null;
+  entry_reason_fa: string | null;
   distance_to_target_pct: number;
   distance_to_stop_pct: number;
   client_power_ratio: number | null;
@@ -65,6 +65,11 @@ interface PositionItem {
 interface PortfolioData {
   id: string;
   name: string;
+  campaign_id: string | null;
+  campaign_status: string | null;
+  campaign_started_at: string | null;
+  campaign_ends_at: string | null;
+  initial_cash: number;
   cash: number;
   total_equity: number;
   realized_pnl: number;
@@ -87,15 +92,15 @@ interface TradeLogItem {
   exit_at: string | null;
   holding_hours: number;
   holding_days: number;
-  expected_days_to_target: number;
+  expected_days_to_target: number | null;
   market_regime: string;
   market_regime_fa: string;
   gross_pnl: number;
   net_pnl: number;
   return_pct: number;
-  risk_pct: number;
-  risk_reward_ratio: number | string;
-  decision_method: string;
+  risk_pct: number | null;
+  risk_reward_ratio: number | string | null;
+  decision_method: string | null;
   exit_reason: string;
   reason_fa: string;
   lesson_fa: string;
@@ -112,7 +117,7 @@ interface IndicatorPerfItem {
   loss_signals: number;
   precision: number;
   avg_return_when_bullish: number;
-  avg_return_when_bearish: number;
+  avg_return_when_bearish: number | null;
   cumulative_pnl: number;
 }
 
@@ -141,6 +146,10 @@ export const PaperTradingView: React.FC = () => {
   const [trades, setTrades] = useState<TradeLogItem[]>([]);
   const [attribution, setAttribution] = useState<IndicatorPerfItem[]>([]);
   const [status, setStatus] = useState<AutoTradingStatus | null>(null);
+  const [fillCount, setFillCount] = useState(0);
+  const [fillLedgerLoaded, setFillLedgerLoaded] = useState(false);
+  const [riskPolicy, setRiskPolicy] = useState<any | null>(null);
+  const [dataError, setDataError] = useState<string | null>(null);
 
   const [activeSubTab, setActiveSubTab] = useState<"positions" | "strategies" | "equity" | "trades" | "indicators">("positions");
   const [opportunities, setOpportunities] = useState<any[]>([]);
@@ -151,30 +160,60 @@ export const PaperTradingView: React.FC = () => {
   const [closingPositionId, setClosingPositionId] = useState<string | null>(null);
   const [closeSuccessMsg, setCloseSuccessMsg] = useState<string | null>(null);
 
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [triggering, setTriggering] = useState(false);
+  const [cycleMessage, setCycleMessage] = useState<string | null>(null);
   const [killSwitchLoading, setKillSwitchLoading] = useState(false);
 
   const fetchAllData = useCallback(async () => {
     setLoading(true);
     try {
-      const [pRes, hRes, tRes, aRes, sRes, oRes] = await Promise.allSettled([
+      const [pRes, hRes, tRes, aRes, sRes, oRes, fRes, rRes] = await Promise.allSettled([
         fetch("/api/v1/paper/portfolio"),
         fetch("/api/v1/auto-trading/portfolio-history?limit=100"),
         fetch("/api/v1/auto-trading/trade-log?limit=100"),
         fetch("/api/v1/auto-trading/attribution"),
         fetch("/api/v1/auto-trading/status"),
-        fetch("/api/v1/opportunities?actionable_only=false"),
+        fetch("/api/v1/opportunities?actionable_only=true"),
+        fetch("/api/v1/paper/ledger/fills"),
+        fetch("/api/v1/paper/risk-policy"),
       ]);
 
-      if (pRes.status === "fulfilled" && pRes.value.ok) setPortfolio(await pRes.value.json());
+      const portfolioOk = pRes.status === "fulfilled" && pRes.value.ok;
+      const fillsOk = fRes.status === "fulfilled" && fRes.value.ok;
+      if (!portfolioOk || !fillsOk) {
+        const unauthorized = (
+          (pRes.status === "fulfilled" && pRes.value.status === 401)
+          || (fRes.status === "fulfilled" && fRes.value.status === 401)
+        );
+        setPortfolio(null);
+        setFillLedgerLoaded(false);
+        setDataError(
+          unauthorized
+            ? "نشست مالک معتبر نیست؛ اعداد کمپین تا ورود دوباره نمایش داده نمی‌شوند."
+            : "پاسخ پورتفو یا دفترکل اجرا تأیید نشد؛ برای جلوگیری از نمایش عدد ساختگی، وضعیت مالی پنهان ماند."
+        );
+        if (unauthorized && typeof window !== "undefined") {
+          window.dispatchEvent(new Event("radar:auth-required"));
+        }
+        return;
+      }
+      setPortfolio(await pRes.value.json());
       if (hRes.status === "fulfilled" && hRes.value.ok) setHistory(await hRes.value.json());
       if (tRes.status === "fulfilled" && tRes.value.ok) setTrades(await tRes.value.json());
       if (aRes.status === "fulfilled" && aRes.value.ok) setAttribution(await aRes.value.json());
       if (sRes.status === "fulfilled" && sRes.value.ok) setStatus(await sRes.value.json());
       if (oRes.status === "fulfilled" && oRes.value.ok) setOpportunities(await oRes.value.json());
+      const fillPayload = await fRes.value.json();
+      setFillCount(fillPayload.fill_count || 0);
+      setFillLedgerLoaded(true);
+      setDataError(null);
+      if (rRes.status === "fulfilled" && rRes.value.ok) setRiskPolicy(await rRes.value.json());
     } catch (e) {
       console.error("PaperTradingView fetch error:", e);
+      setPortfolio(null);
+      setFillLedgerLoaded(false);
+      setDataError("ارتباط با پورتفو یا دفترکل برقرار نشد؛ هیچ عدد نمونه‌ای نمایش داده نمی‌شود.");
     } finally {
       setLoading(false);
     }
@@ -211,14 +250,31 @@ export const PaperTradingView: React.FC = () => {
   }, [selectedPosition]);
 
   const triggerCycleNow = async () => {
+    if (portfolio?.kill_switch_active || !status?.is_running) {
+      setCycleMessage(
+        portfolio?.kill_switch_active
+          ? "کلید قطع اضطراری فعال است؛ چرخه معاملاتی و خرید جدید مسدود است."
+          : "موتور معاملاتی غیرفعال است؛ فقط بروزرسانی تحلیلی داشبورد قابل استفاده است."
+      );
+      return;
+    }
     setTriggering(true);
+    setCycleMessage(null);
     try {
       const res = await fetch("/api/v1/auto-trading/trigger", { method: "POST" });
       if (res.ok) {
         await fetchAllData();
+        setCycleMessage("چرخه بررسی شد؛ نتیجه از دفترکل تازه خوانده شد.");
+      } else {
+        const payload = await res.json().catch(() => null);
+        const detail = payload?.detail;
+        setCycleMessage(
+          detail?.reason || detail?.message || "چرخه متوقف شد؛ داده رسمی تازه یا مجوز ریسک موجود نیست."
+        );
       }
     } catch (e) {
       console.error(e);
+      setCycleMessage("ارتباط با چرخه تحلیلی برقرار نشد؛ هیچ معامله‌ای ثبت نشد.");
     } finally {
       setTriggering(false);
     }
@@ -304,18 +360,39 @@ export const PaperTradingView: React.FC = () => {
     }
   };
 
-  const parseRR = (rr: any): number => {
-    if (typeof rr === "number") return rr;
+  const parseRR = (rr: unknown): number | null => {
+    if (typeof rr === "number" && Number.isFinite(rr)) return rr;
     if (typeof rr === "string") {
       const parts = rr.split(":");
-      if (parts.length > 1) return parseFloat(parts[1]) || 2.5;
-      return parseFloat(rr) || 2.5;
+      const parsed = Number.parseFloat(parts.length > 1 ? parts[1] : rr);
+      return Number.isFinite(parsed) ? parsed : null;
     }
-    return 2.5;
+    return null;
   };
 
-  const initialCapitalRials = 100_000_000_000;
-  const totalEquityRials = portfolio?.total_equity || initialCapitalRials;
+  if (loading && !portfolio) {
+    return (
+      <div className="card-panel" role="status" style={{ padding: "2rem", textAlign: "center", color: "var(--text-secondary)" }}>
+        در حال تأیید پورتفو و دفترکل اجرای کمپین…
+      </div>
+    );
+  }
+
+  if (dataError || !portfolio || !fillLedgerLoaded) {
+    return (
+      <div className="card-panel" role="alert" style={{ padding: "2rem", textAlign: "center", borderColor: "var(--tse-red-border)" }}>
+        <ShieldAlert size={34} color="var(--tse-red)" style={{ margin: "0 auto 0.8rem" }} />
+        <h2 style={{ margin: 0, color: "var(--text-primary)", fontSize: "1.05rem" }}>وضعیت مالی کمپین تأیید نشده است</h2>
+        <p style={{ color: "var(--text-secondary)", fontSize: "0.88rem", margin: "0.6rem auto 1rem", maxWidth: 620 }}>
+          {dataError || "پورتفو یا دفترکل اجرا در دسترس نیست؛ هیچ عددی به‌صورت پیش‌فرض ساخته نمی‌شود."}
+        </p>
+        <a href="/" style={{ color: "var(--tse-blue)", fontWeight: 800 }}>بازگشت به داشبورد و ورود مالک</a>
+      </div>
+    );
+  }
+
+  const initialCapitalRials = portfolio.initial_cash;
+  const totalEquityRials = portfolio.total_equity;
   const totalEquityTomans = totalEquityRials / 10;
   const totalReturnPct = ((totalEquityRials - initialCapitalRials) / initialCapitalRials) * 100;
   const positions = portfolio?.positions || [];
@@ -324,14 +401,27 @@ export const PaperTradingView: React.FC = () => {
   const closedTrades = trades.filter((t) => t.is_closed);
   const winTrades = closedTrades.filter((t) => t.net_pnl > 0);
   const lossTrades = closedTrades.filter((t) => t.net_pnl <= 0);
-  const winRatePct = closedTrades.length > 0 ? (winTrades.length / closedTrades.length) * 100 : 75.0;
+  const winRatePct = closedTrades.length > 0 ? (winTrades.length / closedTrades.length) * 100 : null;
 
-  const totalInvestedInPositionsRials = positions.reduce((acc, p) => acc + (p.current_price * p.quantity), 0);
+  const totalInvestedInPositionsRials = positions
+    .filter((p) => p.is_open)
+    .reduce((acc, p) => acc + (p.current_price * p.quantity), 0);
   const totalInvestedInPositionsTomans = totalInvestedInPositionsRials / 10;
   const portfolioExposurePct = totalEquityRials > 0 ? (totalInvestedInPositionsRials / totalEquityRials) * 100 : 0;
-  const avgRRRatio = positions.length > 0
-    ? positions.reduce((acc, p) => acc + parseRR(p.risk_reward_ratio), 0) / positions.length
-    : 2.6;
+  const rrValues = positions.map((p) => parseRR(p.risk_reward_ratio)).filter((value): value is number => value != null);
+  const avgRRRatio = rrValues.length > 0
+    ? rrValues.reduce((acc, value) => acc + value, 0) / rrValues.length
+    : null;
+  const cycleBlocked = Boolean(portfolio?.kill_switch_active || !status?.is_running);
+  const equityValues = [initialCapitalRials, ...history.map((item) => item.total_equity)];
+  const observedMinEquity = Math.min(...equityValues);
+  const observedMaxEquity = Math.max(...equityValues);
+  const equityPadding = Math.max(
+    initialCapitalRials * 0.01,
+    (observedMaxEquity - observedMinEquity) * 0.1,
+  );
+  const equityChartMin = observedMinEquity - equityPadding;
+  const equityChartMax = observedMaxEquity + equityPadding;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
@@ -352,7 +442,7 @@ export const PaperTradingView: React.FC = () => {
           <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
             <Briefcase size={22} color="var(--tse-blue)" />
             <h2 style={{ fontSize: "1.2rem", fontWeight: 800, color: "#f8fafc", margin: 0 }}>
-              موتور هوشمند معاملات آزمایشی و یادگیری تقویتی (Paper Trading & RL)
+              موتور معاملات کاغذی و بازخورد آماری قابل حسابرسی
             </h2>
             <span
               style={{
@@ -375,11 +465,15 @@ export const PaperTradingView: React.FC = () => {
                   backgroundColor: status?.is_running ? "var(--tse-green)" : "var(--tse-red)",
                 }}
               />
-              {status?.is_running ? "کرون‌جاب ساعتی: فعال" : "موتور: غیرفعال"}
+              {status?.is_running ? "پایش دقیقه‌ای داده: فعال" : "پایش داده: غیرفعال"}
             </span>
           </div>
           <p style={{ fontSize: "0.82rem", color: "#94a3b8", marginTop: "0.35rem", marginBottom: 0 }}>
-            سرمایه اولیه پورتفو: <strong style={{ color: "#f1f5f9" }}>۱ میلیارد تومان</strong> (۱۰٬۰۰۰٬۰۰۰٬۰۰۰ ریال) • هدف بازدهی ماهانه ۱۵ تا ۲۰ درصد • پایش مداوم سود/زیان لحظه‌ای و تارگت‌های قیمتی
+            سرمایه اولیه/وجه نقد کمپین: <strong style={{ color: "#f1f5f9" }}>{formatToman(initialCapitalRials / 10)}</strong> • این عدد معامله نیست؛ تعداد اجرای ثبت‌شده: <strong style={{ color: fillCount === 0 ? "var(--tse-green)" : "var(--tse-blue)" }}>{formatNumberFa(fillCount)}</strong>
+          </p>
+          <p style={{ fontSize: "0.74rem", color: "#94a3b8", marginTop: "0.3rem", marginBottom: 0 }}>
+            کمپین ثابت: <b style={{ direction: "ltr", unicodeBidi: "isolate", color: "#cbd5e1" }}>{portfolio.campaign_id || portfolio.id}</b>
+            {portfolio.campaign_started_at ? ` • شروع: ${new Date(portfolio.campaign_started_at).toLocaleString("fa-IR")}` : ""}
           </p>
         </div>
 
@@ -387,7 +481,7 @@ export const PaperTradingView: React.FC = () => {
           {/* Manual Run Cycle Button */}
           <button
             onClick={triggerCycleNow}
-            disabled={triggering}
+            disabled={triggering || cycleBlocked}
             style={{
               backgroundColor: "var(--tse-blue)",
               color: "#fff",
@@ -396,17 +490,17 @@ export const PaperTradingView: React.FC = () => {
               borderRadius: "var(--radius-sm)",
               fontWeight: 700,
               fontSize: "0.84rem",
-              cursor: triggering ? "not-allowed" : "pointer",
+              cursor: triggering || cycleBlocked ? "not-allowed" : "pointer",
               display: "flex",
               alignItems: "center",
               gap: "0.4rem",
               fontFamily: "inherit",
-              opacity: triggering ? 0.7 : 1,
+              opacity: triggering || cycleBlocked ? 0.55 : 1,
               transition: "all 0.15s ease",
             }}
           >
             <Play size={15} className={triggering ? "animate-spin" : ""} />
-            <span>{triggering ? "در حال اجرای اسکن..." : "اجرای دستی چرخه الان"}</span>
+            <span>{triggering ? "در حال اجرای اسکن..." : cycleBlocked ? "چرخه معاملاتی مسدود" : "اجرای دستی چرخه الان"}</span>
           </button>
 
           {/* Emergency Kill-Switch */}
@@ -434,6 +528,12 @@ export const PaperTradingView: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {cycleMessage && (
+        <div role="status" style={{ padding: "0.75rem 1rem", borderRadius: "8px", backgroundColor: "rgba(245,158,11,0.10)", border: "1px solid rgba(245,158,11,0.35)", color: "var(--tse-amber)", fontSize: "0.84rem", fontWeight: 700 }}>
+          {cycleMessage}
+        </div>
+      )}
 
       {/* ── 1.5 Money Management & Capital Safety Cockpit ────────────────── */}
       <div
@@ -463,7 +563,7 @@ export const PaperTradingView: React.FC = () => {
           <div style={{ backgroundColor: "rgba(30, 41, 59, 0.6)", padding: "0.65rem 0.85rem", borderRadius: "8px", border: "1px solid rgba(255,255,255,0.05)" }}>
             <span style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>سقف درگیری سرمایه در کل بازار:</span>
             <div style={{ fontWeight: 800, fontSize: "0.88rem", color: "var(--text-primary)", marginTop: "2px" }}>
-              حداکثر ۷۰٪ پورتفو (حفظ ۳۰٪ نقدینگی امن)
+              حداکثر {toPersianDigits(riskPolicy?.regimes?.RISK_ON?.max_gross_exposure_pct ?? 70)}٪ پورتفو در رژیم صعودی
             </div>
             <div style={{ fontSize: "0.7rem", color: "var(--tse-blue)", marginTop: "3px" }}>
               درگیری فعلی: {toPersianDigits(portfolioExposurePct.toFixed(0))}٪ ({toPersianDigits((((portfolio?.cash || 0) / totalEquityRials) * 100).toFixed(0))}٪ نقد محفوظ)
@@ -473,7 +573,7 @@ export const PaperTradingView: React.FC = () => {
           <div style={{ backgroundColor: "rgba(30, 41, 59, 0.6)", padding: "0.65rem 0.85rem", borderRadius: "8px", border: "1px solid rgba(255,255,255,0.05)" }}>
             <span style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>سقف سرمایه‌گذاری در هر تک‌سهم:</span>
             <div style={{ fontWeight: 800, fontSize: "0.88rem", color: "var(--text-primary)", marginTop: "2px" }}>
-              حداکثر ۱۰٪ کل سرمایه (۱۰۰ میلیون تومان)
+              حداکثر {formatPercentFa(riskPolicy?.portfolio_limits?.exceptional_max_position_weight_pct ?? 10, 0, false)} کل سرمایه ({formatNumberFa((initialCapitalRials / 10) * ((riskPolicy?.portfolio_limits?.exceptional_max_position_weight_pct ?? 10) / 100) / 1_000_000)} میلیون تومان)
             </div>
             <div style={{ fontSize: "0.7rem", color: "var(--text-muted)", marginTop: "3px" }}>
               تنوع‌بخشی بین ۸ الی ۱۲ نماد برتر بدون ریسک تمرکز
@@ -504,20 +604,33 @@ export const PaperTradingView: React.FC = () => {
 
       {/* ── 2. Summary KPI Cards ────────────────────────────────────────── */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "1rem" }}>
+        <div className="card-panel" style={{ borderLeft: "4px solid var(--tse-blue)" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span style={{ fontSize: "0.76rem", color: "var(--text-muted)" }}>معاملات اجراشده در این کمپین</span>
+            <span style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>دفترکل اجرا</span>
+          </div>
+          <div style={{ fontSize: "1.55rem", fontWeight: 900, color: fillCount === 0 ? "var(--text-primary)" : "var(--tse-blue)", marginTop: "0.25rem" }} className="tabular-num">
+            {toPersianDigits(fillCount)} <span style={{ fontSize: "0.8rem", color: "var(--text-muted)", fontWeight: 500 }}>اجرا</span>
+          </div>
+          <div style={{ fontSize: "0.72rem", color: "var(--text-muted)", marginTop: "0.2rem" }}>
+            {formatNumberFa(openPositionsCount)} موقعیت باز • {formatNumberFa(closedTrades.length)} معامله بسته • سرمایه درگیر: {formatDecimalFa(totalInvestedInPositionsTomans / 1_000_000, 1)} میلیون تومان
+          </div>
+        </div>
+
         {/* Total Equity */}
         <div className="card-panel" style={{ borderLeft: `4px solid ${totalReturnPct >= 0 ? "var(--tse-green)" : "var(--tse-red)"}` }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span style={{ fontSize: "0.76rem", color: "var(--text-muted)" }}>ارزش کل پورتفو (Total NAV)</span>
+            <span style={{ fontSize: "0.76rem", color: "var(--text-muted)" }}>ارزش خالص حساب (نقد + موقعیت باز)</span>
             <span style={{ fontSize: "0.78rem", fontWeight: 700, color: totalReturnPct >= 0 ? "var(--tse-green)" : "var(--tse-red)" }}>
-              {totalReturnPct >= 0 ? "+" : ""}{toPersianDigits(totalReturnPct.toFixed(2))}٪
+              {formatPercentFa(totalReturnPct, 2, true)}
             </span>
           </div>
           <div style={{ fontSize: "1.4rem", fontWeight: 900, color: "var(--text-primary)", marginTop: "0.25rem" }} className="tabular-num">
-            {(totalEquityTomans / 1_000_000).toLocaleString("fa-IR", { maximumFractionDigits: 1 })}{" "}
+            {formatDecimalFa(totalEquityTomans / 1_000_000, 1)}{" "}
             <span style={{ fontSize: "0.8rem", color: "var(--text-muted)", fontWeight: 500 }}>میلیون تومان</span>
           </div>
           <div style={{ fontSize: "0.72rem", color: "var(--text-muted)", marginTop: "0.2rem" }} className="tabular-num">
-            معادل {totalEquityRials.toLocaleString("fa-IR")} ریال
+            مانده حساب است؛ ارزش یک معامله نیست
           </div>
         </div>
 
@@ -526,15 +639,15 @@ export const PaperTradingView: React.FC = () => {
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <span style={{ fontSize: "0.76rem", color: "var(--text-muted)" }}>نقدینگی آزاد در دسترس</span>
             <span style={{ fontSize: "0.72rem", color: "var(--tse-blue)", fontWeight: 600 }}>
-              {toPersianDigits(totalEquityRials > 0 ? (((portfolio?.cash || 0) / totalEquityRials) * 100).toFixed(0) : "0")}٪ نقد
+              {formatPercentFa(totalEquityRials > 0 ? ((portfolio?.cash || 0) / totalEquityRials) * 100 : 0, 0, false)} نقد
             </span>
           </div>
           <div style={{ fontSize: "1.4rem", fontWeight: 900, color: "var(--tse-blue)", marginTop: "0.25rem" }} className="tabular-num">
-            {(((portfolio?.cash || 0) / 10) / 1_000_000).toLocaleString("fa-IR", { maximumFractionDigits: 1 })}{" "}
+            {formatDecimalFa(((portfolio?.cash || 0) / 10) / 1_000_000, 1)}{" "}
             <span style={{ fontSize: "0.8rem", color: "var(--text-muted)", fontWeight: 500 }}>میلیون تومان</span>
           </div>
           <div style={{ fontSize: "0.72rem", color: "var(--text-muted)", marginTop: "0.2rem" }} className="tabular-num">
-            سرمایه درگیر در سهام: {(totalInvestedInPositionsTomans / 1_000_000).toLocaleString("fa-IR", { maximumFractionDigits: 1 })} م.ت ({toPersianDigits(portfolioExposurePct.toFixed(0))}٪)
+            سرمایه درگیر در سهام: {formatDecimalFa(totalInvestedInPositionsTomans / 1_000_000, 1)} م.ت ({formatPercentFa(portfolioExposurePct, 0, false)})
           </div>
         </div>
 
@@ -554,11 +667,11 @@ export const PaperTradingView: React.FC = () => {
             className="tabular-num"
           >
             {(portfolio?.unrealized_pnl || 0) >= 0 ? "+" : ""}
-            {(((portfolio?.unrealized_pnl || 0) / 10) / 1_000_000).toLocaleString("fa-IR", { maximumFractionDigits: 2 })}{" "}
+            {formatDecimalFa(((portfolio?.unrealized_pnl || 0) / 10) / 1_000_000, 2)}{" "}
             <span style={{ fontSize: "0.8rem", color: "var(--text-muted)", fontWeight: 500 }}>میلیون تومان</span>
           </div>
           <div style={{ fontSize: "0.72rem", color: (portfolio?.unrealized_pnl || 0) >= 0 ? "var(--tse-green)" : "var(--tse-red)", marginTop: "0.2rem", fontWeight: 700 }} className="tabular-num">
-            {totalReturnPct >= 0 ? "+" : ""}{toPersianDigits(totalReturnPct.toFixed(2))}٪ سود تجمعی کل پورتفو
+            {formatPercentFa(totalReturnPct, 2, true)} سود تجمعی کل پورتفو
           </div>
         </div>
 
@@ -569,10 +682,10 @@ export const PaperTradingView: React.FC = () => {
             <span style={{ fontSize: "0.72rem", color: "var(--tse-amber)", fontWeight: 600 }}>میانگین معاملات</span>
           </div>
           <div style={{ fontSize: "1.4rem", fontWeight: 900, color: "var(--tse-amber)", marginTop: "0.25rem" }} className="tabular-num">
-            ۱:{toPersianDigits(avgRRRatio.toFixed(1))}
+            {avgRRRatio != null ? formatRatioFa(`1:${avgRRRatio.toFixed(1)}`) : "—"}
           </div>
           <div style={{ fontSize: "0.72rem", color: "var(--text-muted)", marginTop: "0.2rem" }}>
-            نرخ برد استراتژی‌ها: {toPersianDigits(winRatePct.toFixed(0))}٪
+            نرخ برد معاملات بسته‌شده: {winRatePct != null ? formatPercentFa(winRatePct, 0, false) : "نمونه‌ای ثبت نشده"}
           </div>
         </div>
 
@@ -580,7 +693,7 @@ export const PaperTradingView: React.FC = () => {
         <div className="card-panel">
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <span style={{ fontSize: "0.76rem", color: "var(--text-muted)" }}>چرخه‌های اسکن خودکار</span>
-            <span style={{ fontSize: "0.72rem", color: "var(--tse-green)", fontWeight: 600 }}>هر ۱ ساعت</span>
+            <span style={{ fontSize: "0.72rem", color: "var(--tse-green)", fontWeight: 600 }}>هر ۱ دقیقه حین بازار</span>
           </div>
           <div style={{ fontSize: "1.4rem", fontWeight: 900, color: "var(--text-primary)", marginTop: "0.25rem" }} className="tabular-num">
             {status?.total_cycles || 0}{" "}
@@ -708,11 +821,11 @@ export const PaperTradingView: React.FC = () => {
               <Briefcase size={48} style={{ opacity: 0.3, margin: "0 auto 1rem" }} />
               <h3 style={{ fontSize: "1.1rem", fontWeight: 700, color: "var(--text-primary)" }}>در حال حاضر پوزیشن بازی وجود ندارد</h3>
               <p style={{ fontSize: "0.85rem", maxWidth: 500, margin: "0.5rem auto 1.5rem" }}>
-                موتور خودکار در چرخه اسکن، نمادهای دارای امتیاز بالای ۸۰ و همگرایی اندیکاتوری را پس از تأیید فیلترهای ریسک به پورتفو اضافه خواهد کرد.
+                فعلاً JSON API رسمی TSETMC داده قابل معامله تأیید نکرده است؛ تا رفع گیت داده و کلید قطع اضطراری، هیچ سهمی به پورتفو اضافه نمی‌شود.
               </p>
               <button
                 onClick={triggerCycleNow}
-                disabled={triggering}
+                disabled={triggering || cycleBlocked}
                 style={{
                   backgroundColor: "var(--tse-blue)",
                   color: "#fff",
@@ -721,11 +834,12 @@ export const PaperTradingView: React.FC = () => {
                   borderRadius: "var(--radius-sm)",
                   fontWeight: 700,
                   fontSize: "0.85rem",
-                  cursor: "pointer",
+                  cursor: triggering || cycleBlocked ? "not-allowed" : "pointer",
                   fontFamily: "inherit",
+                  opacity: triggering || cycleBlocked ? 0.55 : 1,
                 }}
               >
-                اجرای فوری اسکن و ورود به معاملات
+                {cycleBlocked ? "اسکن تحلیلی — بدون معامله (از داشبورد بروزرسانی کنید)" : "اجرای چرخه بررسی و ارزیابی"}
               </button>
             </div>
           ) : (
@@ -802,7 +916,7 @@ export const PaperTradingView: React.FC = () => {
                                 marginTop: "2px",
                               }}
                             >
-                              {pos.market_regime_fa || "صعودی پرقدرت"}
+                              {pos.market_regime_fa || "رژیم نامشخص"}
                             </span>
                           </td>
 
@@ -885,7 +999,7 @@ export const PaperTradingView: React.FC = () => {
                           <td style={{ padding: "0.85rem 1rem" }}>
                             <div style={{ display: "flex", alignItems: "center", gap: "4px", color: "var(--tse-amber)", fontWeight: 700 }}>
                               <Target size={13} />
-                              <span>{pos.expected_days_to_target || 3} روز کاری</span>
+                              <span>{pos.expected_days_to_target != null ? `${pos.expected_days_to_target} روز کاری` : "—"}</span>
                             </div>
                             <div style={{ fontSize: "0.68rem", color: "var(--text-muted)" }}>افق استراتژی</div>
                           </td>
@@ -893,20 +1007,20 @@ export const PaperTradingView: React.FC = () => {
                           {/* Risk & R/R */}
                           <td style={{ padding: "0.85rem 1rem" }}>
                             <div style={{ fontWeight: 600, color: "var(--text-primary)" }} className="tabular-num">
-                              ریسک: {pos.risk_pct || 0.5}%
+                              ریسک: {pos.risk_pct != null ? `${pos.risk_pct}%` : "—"}
                             </div>
                             <div style={{ fontSize: "0.72rem", color: "var(--tse-blue)", fontWeight: 700 }} className="tabular-num">
-                              R/R: {typeof pos.risk_reward_ratio === "number" ? `1:${pos.risk_reward_ratio}` : pos.risk_reward_ratio}
+                              R/R: {pos.risk_reward_ratio == null ? "—" : (typeof pos.risk_reward_ratio === "number" ? `1:${pos.risk_reward_ratio}` : pos.risk_reward_ratio)}
                             </div>
                           </td>
 
                           {/* Decision Method & Reason */}
                           <td style={{ padding: "0.85rem 1rem", maxWidth: "220px" }}>
                             <div style={{ fontSize: "0.76rem", fontWeight: 700, color: "var(--text-primary)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                              {pos.decision_method || "همگرایی چندعاملی"}
+                              {pos.decision_method || "—"}
                             </div>
                             <div style={{ fontSize: "0.7rem", color: "var(--text-secondary)", marginTop: "2px", lineHeight: "1.3", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                              {pos.entry_reason_fa || "تأیید ورود پول هوشمند و ایچیموکو"}
+                              {pos.entry_reason_fa || "دلیل ثبت نشده"}
                             </div>
                           </td>
 
@@ -1024,11 +1138,11 @@ export const PaperTradingView: React.FC = () => {
             ) : (
               opportunities.map((opp) => {
                 const votes = opp.strategy_votes || [];
-                const pProfitPct = Math.round((opp.p_profit || 0.6) * 100);
+                const pProfitPct = opp.p_profit != null ? Math.round(opp.p_profit * 100) : null;
                 const scoreColor = opp.opportunity_score >= 80 ? "var(--tse-green)" : opp.opportunity_score >= 70 ? "var(--tse-blue)" : "var(--tse-amber)";
-                const target1 = opp.exit_plan?.targets?.[0] || Math.round(opp.entry_zone?.high * 1.035);
-                const target2 = opp.exit_plan?.targets?.[1] || Math.round(opp.entry_zone?.high * 1.07);
-                const stopLoss = opp.invalidation?.price || Math.round(opp.entry_zone?.low * 0.98);
+                const target1 = opp.exit_plan?.targets?.[0] ?? null;
+                const target2 = opp.exit_plan?.targets?.[1] ?? null;
+                const stopLoss = opp.invalidation?.price ?? null;
 
                 return (
                   <div key={opp.id} className="card-panel" style={{ display: "flex", flexDirection: "column", gap: "0.85rem", borderLeft: `4px solid ${scoreColor}` }}>
@@ -1038,7 +1152,7 @@ export const PaperTradingView: React.FC = () => {
                         <span style={{ fontSize: "1.2rem", fontWeight: 900, color: "var(--text-primary)" }}>{opp.symbol}</span>
                         <span style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>{opp.name_fa}</span>
                         <span style={{ fontSize: "0.72rem", backgroundColor: "rgba(59, 130, 246, 0.12)", color: "var(--tse-blue)", padding: "2px 8px", borderRadius: "4px", fontWeight: 700 }}>
-                          {opp.sector || "بازار اول"}
+                          {opp.sector || "گروه نامشخص"}
                         </span>
                       </div>
 
@@ -1052,7 +1166,7 @@ export const PaperTradingView: React.FC = () => {
                         <div style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}>
                           <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>احتمال سود (p_profit):</span>
                           <span style={{ fontSize: "1rem", fontWeight: 800, color: "var(--tse-blue)" }} className="tabular-num">
-                            {pProfitPct}٪
+                            {pProfitPct != null ? `${pProfitPct}٪` : "—"}
                           </span>
                         </div>
                       </div>
@@ -1069,19 +1183,19 @@ export const PaperTradingView: React.FC = () => {
                       <div style={{ backgroundColor: "var(--bg-surface)", padding: "0.5rem 0.75rem", borderRadius: "6px" }}>
                         <span style={{ color: "var(--text-muted)", fontSize: "0.7rem" }}>حد ضرر:</span>
                         <div style={{ fontWeight: 700, color: "var(--tse-red)" }} className="tabular-num">
-                          {stopLoss.toLocaleString("fa-IR")} ﷼
+                          {stopLoss != null ? `${stopLoss.toLocaleString("fa-IR")} ﷼` : "—"}
                         </div>
                       </div>
                       <div style={{ backgroundColor: "var(--bg-surface)", padding: "0.5rem 0.75rem", borderRadius: "6px" }}>
                         <span style={{ color: "var(--text-muted)", fontSize: "0.7rem" }}>تارگت ۱:</span>
                         <div style={{ fontWeight: 700, color: "var(--tse-green)" }} className="tabular-num">
-                          {target1.toLocaleString("fa-IR")} ﷼ (+۳.۵٪)
+                          {target1 != null ? `${target1.toLocaleString("fa-IR")} ﷼` : "—"}
                         </div>
                       </div>
                       <div style={{ backgroundColor: "var(--bg-surface)", padding: "0.5rem 0.75rem", borderRadius: "6px" }}>
                         <span style={{ color: "var(--text-muted)", fontSize: "0.7rem" }}>تارگت ۲:</span>
                         <div style={{ fontWeight: 700, color: "var(--tse-green)" }} className="tabular-num">
-                          {target2.toLocaleString("fa-IR")} ﷼ (+۷.۰٪)
+                          {target2 != null ? `${target2.toLocaleString("fa-IR")} ﷼` : "—"}
                         </div>
                       </div>
                     </div>
@@ -1090,7 +1204,7 @@ export const PaperTradingView: React.FC = () => {
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "0.5rem" }}>
                       {votes.map((v: any, vIdx: number) => {
                         const sKey = typeof v === "string" ? v : v.strategy || v.strategy_key || "";
-                        const votePower = typeof v === "object" ? Math.round((v.vote || 0) * 100) : 80;
+                        const votePower = typeof v === "object" && v.vote != null ? Math.round(v.vote * 100) : null;
                         const reasonFa = typeof v === "object" ? v.reason_fa : "";
 
                         return (
@@ -1111,11 +1225,11 @@ export const PaperTradingView: React.FC = () => {
                                 {getStrategyFa(sKey)}
                               </span>
                               <span style={{ fontSize: "0.72rem", color: "var(--tse-blue)", fontWeight: 700 }} className="tabular-num">
-                                قدرت: {votePower}٪
+                                قدرت: {votePower != null ? `${votePower}٪` : "—"}
                               </span>
                             </div>
                             <span style={{ fontSize: "0.74rem", color: "var(--text-secondary)", lineHeight: 1.4 }}>
-                              {reasonFa || "الگوی تکنیکال و فیلترهای ورود تأیید شد."}
+                              {reasonFa || "دلیل ماشینی ثبت نشده"}
                             </span>
                           </div>
                         );
@@ -1138,7 +1252,7 @@ export const PaperTradingView: React.FC = () => {
               نمودار رشد ارزش کل سرمایه و پورتفو (Equity Curve)
             </h3>
             <p style={{ fontSize: "0.78rem", color: "var(--text-secondary)", margin: "0.3rem 0 0" }}>
-              رصد تغییرات لحظه‌ای ارزش پورتفو، سودهای تحقق‌یافته و مقایسه با سرمایه اولیه ۱ میلیارد تومانی
+              رصد تغییرات ارزش پورتفو، سودهای تحقق‌یافته و مقایسه با سرمایه اولیه ثبت‌شده کمپین
             </p>
           </div>
 
@@ -1146,7 +1260,7 @@ export const PaperTradingView: React.FC = () => {
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
               <div>
                 <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>سرمایه اولیه:</span>
-                <span style={{ fontWeight: 700, color: "var(--text-primary)", marginRight: "0.3rem" }}>۱٬۰۰۰٬۰۰۰٬۰۰۰ تومان</span>
+                <span style={{ fontWeight: 700, color: "var(--text-primary)", marginRight: "0.3rem" }}>{formatToman(initialCapitalRials / 10)}</span>
               </div>
               <div>
                 <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>ارزش فعلی:</span>
@@ -1158,12 +1272,32 @@ export const PaperTradingView: React.FC = () => {
 
             {/* Visual SVG Equity Curve */}
             <div style={{ height: "260px", width: "100%", display: "flex", alignItems: "flex-end", gap: "4px", padding: "1rem 0", borderBottom: "1px solid var(--border-subtle)" }}>
-              {history.length > 0 ? (
+              {history.length === 1 ? (
+                <div
+                  data-testid="equity-opening-point"
+                  aria-label={`نقطه افتتاحیه کمپین با ارزش ${Math.round(history[0].total_equity / 10)} تومان`}
+                  style={{
+                    width: "100%",
+                    height: "100%",
+                    position: "relative",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  <div style={{ position: "absolute", insetInline: 0, top: "50%", height: "1px", backgroundColor: "rgba(59,130,246,0.35)" }} />
+                  <div style={{ position: "relative", display: "flex", flexDirection: "column", alignItems: "center", gap: "0.45rem" }}>
+                    <span style={{ width: 16, height: 16, borderRadius: "50%", backgroundColor: "var(--tse-blue)", border: "3px solid rgba(147,197,253,0.45)", boxShadow: "0 0 0 5px rgba(59,130,246,0.12)" }} />
+                    <strong style={{ color: "var(--text-primary)", fontSize: "0.82rem" }}>{formatToman(history[0].total_equity / 10)}</strong>
+                    <span style={{ color: "var(--text-muted)", fontSize: "0.72rem" }}>
+                      نقطه افتتاحیه • {new Date(history[0].snapshot_at).toLocaleString("fa-IR")}
+                    </span>
+                  </div>
+                </div>
+              ) : history.length > 1 ? (
                 history.map((h, idx) => {
-                  const minEq = 95_000_000_000;
-                  const maxEq = 110_000_000_000;
-                  const heightPct = Math.max(15, Math.min(95, ((h.total_equity - minEq) / (maxEq - minEq)) * 100));
-                  const isUp = h.total_equity >= 100_000_000_000;
+                  const heightPct = Math.max(15, Math.min(95, ((h.total_equity - equityChartMin) / (equityChartMax - equityChartMin)) * 100));
+                  const isUp = h.total_equity >= initialCapitalRials;
 
                   return (
                     <div
@@ -1412,7 +1546,7 @@ export const PaperTradingView: React.FC = () => {
                     </span>
                   </div>
                   <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
-                    {positionDetail?.name_fa || "سهام بورس تهران"} • صنعت: {positionDetail?.sector_name || "فلزات اساسی"} • {selectedPosition.market_regime_fa}
+                    {positionDetail?.name_fa || selectedPosition.symbol} • صنعت: {positionDetail?.sector_name || "نامشخص"} • {selectedPosition.market_regime_fa || "رژیم نامشخص"}
                   </span>
                 </div>
               </div>
@@ -1468,7 +1602,9 @@ export const PaperTradingView: React.FC = () => {
                     </span>
                   </div>
                   <span style={{ fontSize: "0.78rem", color: "var(--tse-green)", fontWeight: 800 }}>
-                    {positionDetail?.progress_to_target_pct || 42}٪ از مسیر رسیدن به تارگت اول طی شده است
+                    {positionDetail?.progress_to_target_pct != null
+                      ? `${positionDetail.progress_to_target_pct}٪ از مسیر رسیدن به تارگت اول طی شده است`
+                      : "پیشرفت قابل محاسبه نیست"}
                   </span>
                 </div>
 
@@ -1480,7 +1616,7 @@ export const PaperTradingView: React.FC = () => {
                     <div
                       style={{
                         height: "100%",
-                        width: `${Math.min(100, Math.max(10, (positionDetail?.progress_to_target_pct || 40)))}%`,
+                        width: `${Math.min(100, Math.max(0, positionDetail?.progress_to_target_pct ?? 0))}%`,
                         backgroundColor: "var(--tse-green)",
                         borderRadius: "4px",
                         boxShadow: "0 0 10px rgba(34, 197, 94, 0.5)",
@@ -1594,9 +1730,13 @@ export const PaperTradingView: React.FC = () => {
                 {/* SVG Visual Candle Bar Chart */}
                 <div style={{ height: "180px", width: "100%", display: "flex", alignItems: "flex-end", gap: "8px", padding: "1rem 0", position: "relative" }}>
                   {(positionDetail?.candles || []).map((c: any, idx: number) => {
-                    const minPrice = (selectedPosition.stop_loss || 1000) * 0.96;
-                    const maxPrice = (selectedPosition.target_price || 1000) * 1.05;
-                    const heightPct = Math.max(15, Math.min(95, ((c.close - minPrice) / (maxPrice - minPrice)) * 100));
+                    const candlePrices = (positionDetail?.candles || [])
+                      .flatMap((bar: any) => [bar.low, bar.high, bar.open, bar.close])
+                      .filter((price: unknown): price is number => typeof price === "number" && Number.isFinite(price));
+                    const minPrice = candlePrices.length > 0 ? Math.min(...candlePrices) : c.close;
+                    const maxPrice = candlePrices.length > 0 ? Math.max(...candlePrices) : c.close;
+                    const priceRange = Math.max(1, maxPrice - minPrice);
+                    const heightPct = Math.max(1, Math.min(100, ((c.close - minPrice) / priceRange) * 100));
                     const isUp = c.close >= c.open;
 
                     return (
@@ -1659,7 +1799,7 @@ export const PaperTradingView: React.FC = () => {
                           {sv.strategy_fa || sv.strategy}
                         </span>
                         <span style={{ fontSize: "0.72rem", color: "var(--tse-blue)", fontWeight: 800 }} className="tabular-num">
-                          قدرت رأی: {Math.round((sv.vote || 0.8) * 100)}٪
+                          قدرت رأی: {sv.vote != null ? `${Math.round(sv.vote * 100)}٪` : "—"}
                         </span>
                       </div>
                       <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)", lineHeight: 1.4 }}>
@@ -1690,7 +1830,7 @@ export const PaperTradingView: React.FC = () => {
                     <span>توصیه معاملاتی سیستم:</span>
                   </div>
                   <p style={{ fontSize: "0.82rem", color: "var(--text-primary)", margin: "0.3rem 0 0", lineHeight: 1.5 }}>
-                    {positionDetail?.ai_summary_fa || "موقعیت در وضعیت صعودی پایدار قرار دارد و اهداف قیمتی فعال هستند."}
+                    {positionDetail?.ai_summary_fa || "جمع‌بندی تحلیلی معتبری برای این موقعیت ثبت نشده است."}
                   </p>
                 </div>
 

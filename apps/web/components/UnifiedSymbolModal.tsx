@@ -61,6 +61,7 @@ export const UnifiedSymbolModal: React.FC<UnifiedSymbolModalProps> = ({
   const [codalFilings, setCodalFilings] = useState<any[]>([]);
   const [portfolioData, setPortfolioData] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
+  const [dataError, setDataError] = useState<string | null>(null);
 
   // Order & Management action state
   const [ordering, setOrdering] = useState(false);
@@ -86,6 +87,11 @@ export const UnifiedSymbolModal: React.FC<UnifiedSymbolModalProps> = ({
 
   const fetchAllSymbolData = async (sym: string) => {
     setLoading(true);
+    setDataError(null);
+    setChartData(null);
+    setFundamentalData(null);
+    setOpportunityData(null);
+    setCodalFilings([]);
     setOrderFeedback(null);
     try {
       const [cRes, fRes, oRes, dRes, pRes] = await Promise.allSettled([
@@ -96,7 +102,12 @@ export const UnifiedSymbolModal: React.FC<UnifiedSymbolModalProps> = ({
         fetch(`/api/v1/paper/portfolio`),
       ]);
 
-      if (cRes.status === "fulfilled" && cRes.value.ok) setChartData(await cRes.value.json());
+      if (cRes.status === "fulfilled" && cRes.value.ok) {
+        setChartData(await cRes.value.json());
+      } else {
+        const detail = cRes.status === "fulfilled" ? await cRes.value.text() : "ارتباط با API برقرار نشد";
+        setDataError(`نمودار رسمی در دسترس نیست: ${detail}`);
+      }
       if (fRes.status === "fulfilled" && fRes.value.ok) setFundamentalData(await fRes.value.json());
       if (dRes.status === "fulfilled" && dRes.value.ok) {
         const filingsData = await dRes.value.json();
@@ -117,6 +128,33 @@ export const UnifiedSymbolModal: React.FC<UnifiedSymbolModalProps> = ({
   };
 
   if (!symbol) return null;
+
+  if (loading || dataError || !Array.isArray(chartData?.bars) || chartData.bars.length === 0) {
+    return (
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={`وضعیت داده نماد ${symbol}`}
+        onClick={onClose}
+        style={{ position: "fixed", inset: 0, zIndex: 9999, backgroundColor: "rgba(0,0,0,0.85)", display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem" }}
+      >
+        <div onClick={(event) => event.stopPropagation()} className="card-panel" style={{ width: "min(560px, 94vw)", padding: "1.25rem", display: "flex", flexDirection: "column", gap: "0.9rem" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <strong>{symbol}</strong>
+            <button onClick={onClose} className="btn-secondary"><X size={16} /></button>
+          </div>
+          {loading ? (
+            <span style={{ color: "var(--text-secondary)" }}>در حال دریافت دادهٔ رسمی و بررسی provenance…</span>
+          ) : (
+            <div style={{ color: "var(--tse-amber)", lineHeight: 1.8 }}>
+              {dataError || "هیچ کندل رسمی معتبر برای این نماد ثبت نشده است."}
+              <div style={{ color: "var(--text-secondary)", fontSize: "0.8rem" }}>هیچ قیمت، امتیاز یا توصیهٔ جایگزین ساخته نمی‌شود.</div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   const ownedPosition = portfolioData?.positions?.find(
     (p: any) => p.symbol === symbol && p.is_open
@@ -150,44 +188,48 @@ export const UnifiedSymbolModal: React.FC<UnifiedSymbolModalProps> = ({
   // Price & Scoring derivations
   const bars = chartData?.bars || [];
   const latestBar = bars[bars.length - 1] || {};
-  const curPrice = latestBar.close || 5000;
-  const yesterdayPrice = latestBar.yesterday_price || latestBar.open || curPrice;
-  const returnPct = yesterdayPrice > 0 ? (((curPrice - yesterdayPrice) / yesterdayPrice) * 100) : 0;
-  const isPos = returnPct >= 0;
+  const curPrice = latestBar.close ?? null;
+  const yesterdayPrice = latestBar.yesterday_price ?? latestBar.open ?? null;
+  const returnPct = curPrice != null && yesterdayPrice != null && yesterdayPrice > 0 ? (((curPrice - yesterdayPrice) / yesterdayPrice) * 100) : null;
+  const isPos = returnPct != null && returnPct >= 0;
 
-  const isGoodStock = opportunityData ? opportunityData.opportunity_score >= 60 : true;
-  const compositeScore = opportunityData?.opportunity_score || fundamentalData?.fundamental_score || 78;
+  const isGoodStock = opportunityData?.actionable === true;
+  const compositeScore = opportunityData?.opportunity_score ?? fundamentalData?.fundamental_score ?? null;
 
   // Analysis Power Percentages
-  const techPowerPct = Math.round(Math.min(96, Math.max(60, compositeScore * 1.05)));
-  const tapePowerPct = Math.round(Math.min(98, Math.max(65, (chartData?.real_buyer_power_ratio || 1.45) * 58)));
-  const fundPowerPct = Math.round(Math.min(95, Math.max(62, (fundamentalData?.piotroski_f_score || 8) * 11)));
-  const probProfitPct = Math.round((opportunityData?.p_profit ? opportunityData.p_profit * 100 : 82));
+  const techPowerPct = opportunityData?.confidence != null ? Math.round(opportunityData.confidence) : null;
+  const tapePowerPct = opportunityData?.signal_strength != null ? Math.round(opportunityData.signal_strength) : null;
+  const fundPowerPct = fundamentalData?.fundamental_score != null ? Math.round(fundamentalData.fundamental_score) : null;
+  const probProfitPct = opportunityData?.p_profit != null ? Math.round(opportunityData.p_profit * 100) : null;
 
   // Dynamic tags
-  const tags = [
-    { label: "🌟 افشای الف / گزارش مثبت کدال", color: "#c084fc", bg: "rgba(192, 132, 252, 0.15)" },
-    { label: `👥 ورود پول هوشمند (${toPersianDigits((chartData?.real_buyer_power_ratio || 1.45).toFixed(2))}x)`, color: "#22c55e", bg: "rgba(34, 197, 94, 0.15)" },
-    { label: "📈 شکست مقاومت و تثبیت بالای EMA", color: "#38bdf8", bg: "rgba(56, 189, 248, 0.15)" },
-    { label: `📑 رشد فروش ${formatPercentFa(fundamentalData?.monthly_sales_growth_yoy || 35, 0)}`, color: "#f59e0b", bg: "rgba(245, 158, 11, 0.15)" },
-  ];
+  const tags: Array<{ label: string; color: string; bg: string }> = (
+    Array.isArray(opportunityData?.top_reasons_fa) ? opportunityData.top_reasons_fa : []
+  ).slice(0, 4).map((label: string, index: number) => ({
+    label,
+    color: ["#c084fc", "#22c55e", "#38bdf8", "#f59e0b"][index],
+    bg: ["rgba(192, 132, 252, 0.15)", "rgba(34, 197, 94, 0.15)", "rgba(56, 189, 248, 0.15)", "rgba(245, 158, 11, 0.15)"][index],
+  }));
 
   // Price targets
-  const entryPrice = opportunityData?.entry_zone?.low || curPrice;
-  const target1 = opportunityData?.exit_plan?.targets?.[0] || Math.round(curPrice * 1.075);
-  const target2 = opportunityData?.exit_plan?.targets?.[1] || Math.round(curPrice * 1.145);
-  const stopLoss = opportunityData?.invalidation?.price || Math.round(curPrice * 0.945);
-  const sellAdvicePrice = !isGoodStock ? Math.round(curPrice * 0.96) : undefined;
+  const entryPrice = opportunityData?.entry_zone?.low ?? ownedPosition?.average_entry_price;
+  const target1 = opportunityData?.exit_plan?.targets?.[0] ?? ownedPosition?.target_price;
+  const target2 = opportunityData?.exit_plan?.targets?.[1];
+  const stopLoss = opportunityData?.invalidation?.price ?? ownedPosition?.stop_loss;
+  const sellAdvicePrice = undefined;
 
   // Position financials
-  const posValueTomans = ownedPosition ? Math.round((ownedPosition.quantity * curPrice) / 10) : 0;
+  const posValueTomans = ownedPosition && curPrice != null ? Math.round((ownedPosition.quantity * curPrice) / 10) : 0;
   const posPnlTomans = ownedPosition ? Math.round(ownedPosition.unrealized_pnl / 10) : 0;
-  const posPnlPct = ownedPosition && ownedPosition.average_entry_price > 0
+  const posPnlPct = ownedPosition && curPrice != null && ownedPosition.average_entry_price > 0
     ? (((curPrice - ownedPosition.average_entry_price) / ownedPosition.average_entry_price) * 100)
     : 0;
 
   return (
     <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={`تحلیل ۳۶۰ درجه نماد ${symbol}`}
       style={{
         position: "fixed",
         inset: 0,
@@ -255,7 +297,7 @@ export const UnifiedSymbolModal: React.FC<UnifiedSymbolModalProps> = ({
                   {symbol}
                 </span>
                 <span style={{ fontSize: "0.85rem", color: "#94a3b8" }}>
-                  {chartData?.name_fa || fundamentalData?.name_fa || "شرکت بورسی"}
+                  {chartData?.name_fa || fundamentalData?.name_fa || symbol}
                 </span>
 
                 {ownedPosition ? (
@@ -264,11 +306,11 @@ export const UnifiedSymbolModal: React.FC<UnifiedSymbolModalProps> = ({
                   </span>
                 ) : isGoodStock ? (
                   <span style={{ fontSize: "0.72rem", padding: "2px 8px", borderRadius: "10px", backgroundColor: "rgba(34, 197, 94, 0.2)", color: "#22c55e", fontWeight: 800 }}>
-                    پیشنهاد خرید هوش مصنوعی (نمره {toPersianDigits(compositeScore)})
+                    سیگنال کاغذی قابل اقدام (نمره {toPersianDigits(compositeScore)})
                   </span>
                 ) : (
                   <span style={{ fontSize: "0.72rem", padding: "2px 8px", borderRadius: "10px", backgroundColor: "rgba(239, 68, 68, 0.2)", color: "#ef4444", fontWeight: 800 }}>
-                    سهم پرریسک / اخطار خروج
+                    بدون سیگنال قابل معامله
                   </span>
                 )}
               </div>
@@ -324,14 +366,14 @@ export const UnifiedSymbolModal: React.FC<UnifiedSymbolModalProps> = ({
                 style={{
                   fontSize: "0.78rem",
                   fontWeight: 800,
-                  color: isPos ? "var(--tse-green)" : "var(--tse-red)",
+                  color: returnPct == null ? "var(--text-muted)" : (isPos ? "var(--tse-green)" : "var(--tse-red)"),
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "flex-end",
                   gap: "2px",
                 }}
               >
-                {isPos ? <ArrowUpRight size={13} /> : <ArrowDownRight size={13} />}
+                {returnPct == null ? null : (isPos ? <ArrowUpRight size={13} /> : <ArrowDownRight size={13} />)}
                 <span>{formatPercentFa(returnPct, 2)}</span>
               </div>
             </div>
@@ -398,10 +440,10 @@ export const UnifiedSymbolModal: React.FC<UnifiedSymbolModalProps> = ({
                 <Brain size={18} color="#c084fc" />
                 <div>
                   <div style={{ fontSize: "0.82rem", fontWeight: 800, color: "#c084fc" }}>
-                    🤖 مدیریت خودکار هوش مصنوعی فعال است
+                    مدیریت خودکار کاغذی تحت کنترل گیت‌ها
                   </div>
                   <div style={{ fontSize: "0.72rem", color: "#94a3b8", marginTop: "2px" }}>
-                    وضعیت: پایش لحظه‌ای | آخرین بررسی: ۲ دقیقه پیش | بررسی بعدی: ۵۸ دقیقه دیگر
+                    وضعیت واقعی از scheduler، kill-switch و freshness داده تعیین می‌شود.
                   </div>
                 </div>
               </div>
@@ -436,20 +478,20 @@ export const UnifiedSymbolModal: React.FC<UnifiedSymbolModalProps> = ({
             symbol={symbol}
             nameFa={chartData?.name_fa}
             bars={bars}
-            plannedEntry={entryPrice}
+            plannedEntry={isGoodStock ? entryPrice : undefined}
             avgFillPrice={ownedPosition ? ownedPosition.average_entry_price : undefined}
-            orderLimit={entryPrice}
-            target1={target1}
-            target2={target2}
-            stopLoss={stopLoss}
+            orderLimit={isGoodStock ? entryPrice : undefined}
+            target1={isGoodStock ? target1 : undefined}
+            target2={isGoodStock ? target2 : undefined}
+            stopLoss={isGoodStock ? stopLoss : undefined}
             isGoodStock={isGoodStock}
             sellAdvicePrice={sellAdvicePrice}
-            rsiValue={Math.round(chartData?.rsi_14 || 58.4)}
-            marketRegime="risk_on"
+            rsiValue={latestBar.rsi_14 != null ? Math.round(latestBar.rsi_14) : undefined}
+            marketRegime={opportunityData?.regime || "unknown"}
           />
 
           {/* 2. Key Action Strip */}
-          <div
+          {(ownedPosition || opportunityData?.actionable === true) ? <div
             style={{
               backgroundColor: "#131b2e",
               padding: "0.85rem 1.25rem",
@@ -471,28 +513,28 @@ export const UnifiedSymbolModal: React.FC<UnifiedSymbolModalProps> = ({
               </div>
 
               <div>
-                <span style={{ fontSize: "0.72rem", color: "#64748b" }}>🎯 هدف اول (+۷.۵٪):</span>
+                <span style={{ fontSize: "0.72rem", color: "#64748b" }}>🎯 هدف اول ثبت‌شده:</span>
                 <div style={{ fontWeight: 800, color: "var(--tse-green)", fontSize: "0.95rem" }}>
                   {formatRial(target1)}
                 </div>
               </div>
 
               <div>
-                <span style={{ fontSize: "0.72rem", color: "#64748b" }}>🏆 هدف دوم (+۱۴.۵٪):</span>
+                <span style={{ fontSize: "0.72rem", color: "#64748b" }}>🏆 هدف دوم ثبت‌شده:</span>
                 <div style={{ fontWeight: 800, color: "var(--tse-purple)", fontSize: "0.95rem" }}>
                   {formatRial(target2)}
                 </div>
               </div>
 
               <div>
-                <span style={{ fontSize: "0.72rem", color: "#64748b" }}>🛑 حد ضرر (-۵.۵٪):</span>
+                <span style={{ fontSize: "0.72rem", color: "#64748b" }}>🛑 حد ضرر ثبت‌شده:</span>
                 <div style={{ fontWeight: 800, color: "var(--tse-red)", fontSize: "0.95rem" }}>
                   {formatRial(stopLoss)}
                 </div>
               </div>
             </div>
 
-            {!ownedPosition && isGoodStock && (
+            {!ownedPosition && opportunityData?.actionable === true && (
               <div style={{ display: "flex", gap: "0.5rem" }}>
                 <button
                   onClick={() => setIsRiskModalOpen(true)}
@@ -522,14 +564,26 @@ export const UnifiedSymbolModal: React.FC<UnifiedSymbolModalProps> = ({
                 </button>
               </div>
             )}
-          </div>
+          </div> : (
+            <div style={{
+              backgroundColor: "rgba(148, 163, 184, 0.08)",
+              padding: "0.85rem 1.25rem",
+              borderRadius: "10px",
+              border: "1px solid #334155",
+              color: "#cbd5e1",
+              fontSize: "0.85rem",
+              fontWeight: 700,
+            }}>
+              این تحلیل فقط پژوهشی است؛ تا عبور از کالیبراسیون، داده بنیادی و گیت‌های ریسک هیچ نقطه ورود، هدف یا حد ضرر اجرایی صادر نشده است.
+            </div>
+          )}
 
           {/* Render Pre-Trade Risk Modal */}
           {isRiskModalOpen && (
             <PreTradeRiskModal
               isOpen={isRiskModalOpen}
               onClose={() => setIsRiskModalOpen(false)}
-              signalId={opportunityData?.id || (symbol ? `sig_${symbol}` : null)}
+              signalId={opportunityData?.id || null}
               symbol={symbol || ""}
               onOrderSuccess={(msg) => {
                 setOrderFeedback({ type: "success", text: msg });
@@ -560,7 +614,7 @@ export const UnifiedSymbolModal: React.FC<UnifiedSymbolModalProps> = ({
                   </h4>
                 </div>
                 <span style={{ fontSize: "0.78rem", fontWeight: 800, color: "var(--tse-blue)", backgroundColor: "var(--tse-blue-subtle)", padding: "2px 7px", borderRadius: "4px" }}>
-                  سیگنال معتبر
+                  {opportunityData?.actionable === true ? "سیگنال معتبر" : "غیرقابل معامله"}
                 </span>
               </div>
 
@@ -568,7 +622,7 @@ export const UnifiedSymbolModal: React.FC<UnifiedSymbolModalProps> = ({
                 <div>
                   <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem", marginBottom: "2px" }}>
                     <span style={{ color: "#94a3b8" }}>قدرت خریدار حقیقی (پول هوشمند):</span>
-                    <strong style={{ color: "var(--tse-green)" }}>{toPersianDigits((chartData?.real_buyer_power_ratio || 1.45).toFixed(2))} برابر فروشنده</strong>
+                    <strong style={{ color: "var(--tse-green)" }}>{latestBar.real_buy_power_ratio != null ? `${toPersianDigits(latestBar.real_buy_power_ratio.toFixed(2))} برابر فروشنده` : "—"}</strong>
                   </div>
                   <div style={{ height: "5px", backgroundColor: "#0b101b", borderRadius: "3px", overflow: "hidden" }}>
                     <div style={{ width: `${tapePowerPct}%`, height: "100%", backgroundColor: "var(--tse-green)" }} />
@@ -578,20 +632,20 @@ export const UnifiedSymbolModal: React.FC<UnifiedSymbolModalProps> = ({
                 <div>
                   <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem", marginBottom: "2px" }}>
                     <span style={{ color: "#94a3b8" }}>موقعیت نسبت به میانگین‌های EMA:</span>
-                    <strong style={{ color: "var(--tse-blue)" }}>تثبیت صعودی (بالای EMA-20)</strong>
+                    <strong style={{ color: "var(--tse-blue)" }}>{chartData?.technical_analysis?.trend_badge || "—"}</strong>
                   </div>
                   <div style={{ height: "5px", backgroundColor: "#0b101b", borderRadius: "3px", overflow: "hidden" }}>
-                    <div style={{ width: "86%", height: "100%", backgroundColor: "var(--tse-blue)" }} />
+                    <div style={{ width: `${techPowerPct ?? 0}%`, height: "100%", backgroundColor: "var(--tse-blue)" }} />
                   </div>
                 </div>
 
                 <div>
                   <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem", marginBottom: "2px" }}>
                     <span style={{ color: "#94a3b8" }}>نوسان‌نما و قدرت RSI:</span>
-                    <strong style={{ color: "var(--tse-gold)" }}>{toPersianDigits(Math.round(chartData?.rsi_14 || 58))} (شتاب صعودی)</strong>
+                    <strong style={{ color: "var(--tse-gold)" }}>{latestBar.rsi_14 != null ? toPersianDigits(Math.round(latestBar.rsi_14)) : "—"}</strong>
                   </div>
                   <div style={{ height: "5px", backgroundColor: "#0b101b", borderRadius: "3px", overflow: "hidden" }}>
-                    <div style={{ width: "76%", height: "100%", backgroundColor: "var(--tse-gold)" }} />
+                    <div style={{ width: `${latestBar.rsi_14 ?? 0}%`, height: "100%", backgroundColor: "var(--tse-gold)" }} />
                   </div>
                 </div>
               </div>
@@ -617,7 +671,7 @@ export const UnifiedSymbolModal: React.FC<UnifiedSymbolModalProps> = ({
                   </h4>
                 </div>
                 <span style={{ fontSize: "0.78rem", fontWeight: 800, color: "var(--tse-green)", backgroundColor: "var(--tse-green-subtle)", padding: "2px 7px", borderRadius: "4px" }}>
-                  ارزندگی بالا
+                  {fundamentalData ? fundamentalData.valuation_status_fa : "بدون snapshot معتبر"}
                 </span>
               </div>
 
@@ -625,30 +679,30 @@ export const UnifiedSymbolModal: React.FC<UnifiedSymbolModalProps> = ({
                 <div>
                   <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem", marginBottom: "2px" }}>
                     <span style={{ color: "#94a3b8" }}>رشد سالانه فروش در کدال:</span>
-                    <strong style={{ color: "var(--tse-green)" }}>{formatPercentFa(fundamentalData?.monthly_sales_growth_yoy || 35, 0)} (جهش عالی)</strong>
+                    <strong style={{ color: "var(--tse-green)" }}>{formatPercentFa(fundamentalData?.monthly_sales_growth_yoy, 0)}</strong>
                   </div>
                   <div style={{ height: "5px", backgroundColor: "#0b101b", borderRadius: "3px", overflow: "hidden" }}>
-                    <div style={{ width: "90%", height: "100%", backgroundColor: "var(--tse-green)" }} />
+                    <div style={{ width: `${fundamentalData?.monthly_sales_growth_yoy != null ? Math.max(0, Math.min(100, fundamentalData.monthly_sales_growth_yoy)) : 0}%`, height: "100%", backgroundColor: "var(--tse-green)" }} />
                   </div>
                 </div>
 
                 <div>
                   <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem", marginBottom: "2px" }}>
                     <span style={{ color: "#94a3b8" }}>نسبت P/E سهم به صنعت:</span>
-                    <strong style={{ color: "var(--tse-blue)" }}>{toPersianDigits((fundamentalData?.p_e_ratio || 5.8).toFixed(1))} (گروه: {toPersianDigits((fundamentalData?.sector_p_e || 6.5).toFixed(1))})</strong>
+                    <strong style={{ color: "var(--tse-blue)" }}>{fundamentalData?.p_e_ratio != null ? `${toPersianDigits(fundamentalData.p_e_ratio.toFixed(1))} (گروه: ${toPersianDigits(fundamentalData.sector_p_e?.toFixed?.(1))})` : "—"}</strong>
                   </div>
                   <div style={{ height: "5px", backgroundColor: "#0b101b", borderRadius: "3px", overflow: "hidden" }}>
-                    <div style={{ width: "82%", height: "100%", backgroundColor: "var(--tse-blue)" }} />
+                    <div style={{ width: `${fundPowerPct ?? 0}%`, height: "100%", backgroundColor: "var(--tse-blue)" }} />
                   </div>
                 </div>
 
                 <div>
                   <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem", marginBottom: "2px" }}>
                     <span style={{ color: "#94a3b8" }}>سلامت ترازنامه (امتیاز پیوتروسکی):</span>
-                    <strong style={{ color: "var(--tse-green)" }}>{toPersianDigits(fundamentalData?.piotroski_f_score || 8)} از ۹ (عالی)</strong>
+                    <strong style={{ color: "var(--tse-green)" }}>{fundamentalData?.piotroski_f_score != null ? `${toPersianDigits(fundamentalData.piotroski_f_score)} از ۹` : "—"}</strong>
                   </div>
                   <div style={{ height: "5px", backgroundColor: "#0b101b", borderRadius: "3px", overflow: "hidden" }}>
-                    <div style={{ width: "88%", height: "100%", backgroundColor: "var(--tse-green)" }} />
+                    <div style={{ width: `${fundamentalData?.piotroski_f_score != null ? (fundamentalData.piotroski_f_score / 9) * 100 : 0}%`, height: "100%", backgroundColor: "var(--tse-green)" }} />
                   </div>
                 </div>
               </div>
@@ -675,14 +729,14 @@ export const UnifiedSymbolModal: React.FC<UnifiedSymbolModalProps> = ({
                 </h4>
               </div>
               <span style={{ fontSize: "0.72rem", color: "#c084fc", backgroundColor: "rgba(192, 132, 252, 0.15)", padding: "2px 8px", borderRadius: "4px", fontWeight: 700 }}>
-                {toPersianDigits(codalFilings.length || 1)} اطلاعیه تحلیل‌شده با NLP
+                {toPersianDigits(codalFilings.length)} اطلاعیه دارای provenance
               </span>
             </div>
 
             <div style={{ display: "flex", flexDirection: "column", gap: "0.55rem" }}>
               {(!codalFilings || !Array.isArray(codalFilings) || codalFilings.length === 0) ? (
                 <div style={{ backgroundColor: "#0b101b", padding: "0.75rem 1rem", borderRadius: "6px", fontSize: "0.78rem", color: "#94a3b8" }}>
-                  اطلاعیه افشای اطلاعات بااهمیت یا گزارش ماهانه جدید در سامانه کدال ثبت شده است و نمره بنیادی سهم در محدوده مثبت قرار دارد.
+                  هیچ اطلاعیهٔ کدال دارای receipt معتبر برای این نماد ثبت نشده است.
                 </div>
               ) : (
                 (Array.isArray(codalFilings) ? codalFilings : []).slice(0, 3).map((filing: any) => (
@@ -712,11 +766,11 @@ export const UnifiedSymbolModal: React.FC<UnifiedSymbolModalProps> = ({
                           color: filing.sentiment === "positive" ? "#22c55e" : "#38bdf8",
                         }}
                       >
-                        {filing.sentiment_fa || "تأثیر مثبت"} (اثر: {toPersianDigits(filing.impact_score || "۸.۵")}/۱۰)
+                        {filing.sentiment_fa || "نامشخص"} (اثر: {toPersianDigits(filing.impact_score)}/۱۰)
                       </span>
                     </div>
                     <p style={{ margin: 0, fontSize: "0.75rem", color: "#94a3b8", lineHeight: 1.45 }}>
-                      {filing.summary_fa || "گزارش حاکی از افزایش درآمد و بهبود حاشیه سود عملیاتی شرکت در دوره اخیر می‌باشد."}
+                      {filing.summary_fa || "خلاصهٔ تحلیلی ثبت نشده است."}
                     </p>
                   </div>
                 ))
@@ -732,7 +786,9 @@ export const UnifiedSymbolModal: React.FC<UnifiedSymbolModalProps> = ({
                 <span>۱. وضعیت پول هوشمند و تابلو</span>
               </div>
               <p style={{ margin: "0.35rem 0 0", fontSize: "0.76rem", color: "#94a3b8", lineHeight: 1.45 }}>
-                سرانه خرید حقیقی‌ها {toPersianDigits((chartData?.real_buyer_power_ratio || 1.45).toFixed(2))} برابر فروشنده‌ها است که نشان‌دهنده ورود نقدینگی قدرتمند است.
+                {latestBar.real_buy_power_ratio != null
+                  ? `نسبت قدرت خریدار حقیقی ثبت‌شده ${toPersianDigits(latestBar.real_buy_power_ratio.toFixed(2))} است.`
+                  : "دادهٔ معتبر حقیقی/حقوقی برای این کندل موجود نیست."}
               </p>
             </div>
 
@@ -742,7 +798,9 @@ export const UnifiedSymbolModal: React.FC<UnifiedSymbolModalProps> = ({
                 <span>۲. صورت‌های مالی و کدال</span>
               </div>
               <p style={{ margin: "0.35rem 0 0", fontSize: "0.76rem", color: "#94a3b8", lineHeight: 1.45 }}>
-                فروش ماهانه نسبت به سال قبل {formatPercentFa(fundamentalData?.monthly_sales_growth_yoy || 35, 0)} رشد داشته و سودآوری شرکت تثبیت شده است.
+                {fundamentalData?.monthly_sales_growth_yoy != null
+                  ? `تغییر سالانهٔ فروش ماهانه ${formatPercentFa(fundamentalData.monthly_sales_growth_yoy, 0)} ثبت شده است.`
+                  : "snapshot بنیادی معتبر در دسترس نیست."}
               </p>
             </div>
 
@@ -752,7 +810,7 @@ export const UnifiedSymbolModal: React.FC<UnifiedSymbolModalProps> = ({
                 <span>۳. چارت و میانگین متحرک</span>
               </div>
               <p style={{ margin: "0.35rem 0 0", fontSize: "0.76rem", color: "#94a3b8", lineHeight: 1.45 }}>
-                قیمت بالای میانگین‌های EMA تثبیت شده و الگو حاکی از بریک‌اوت صعودی به سمت هدف قیمتی اول است.
+                {chartData?.technical_analysis?.trend_badge || "روند تکنیکال با دادهٔ موجود قابل ارزیابی نیست."}
               </p>
             </div>
 
@@ -762,7 +820,9 @@ export const UnifiedSymbolModal: React.FC<UnifiedSymbolModalProps> = ({
                 <span>۴. ارزندگی نسبت به صنعت</span>
               </div>
               <p style={{ margin: "0.35rem 0 0", fontSize: "0.76rem", color: "#94a3b8", lineHeight: 1.45 }}>
-                نسبت P/E برابر {toPersianDigits((fundamentalData?.p_e_ratio || 5.8).toFixed(1))} در مقایسه با میانگین گروه حاشیه امن مناسبی را ایجاد کرده است.
+                {fundamentalData?.p_e_ratio != null
+                  ? `P/E ثبت‌شده ${toPersianDigits(fundamentalData.p_e_ratio.toFixed(1))} و P/E گروه ${toPersianDigits(fundamentalData.sector_p_e?.toFixed?.(1))} است؛ نتیجهٔ ارزندگی در snapshot: ${fundamentalData.valuation_status_fa || "نامشخص"}.`
+                  : "نسبت‌های ارزش‌گذاری معتبر در دسترس نیست."}
               </p>
             </div>
           </div>

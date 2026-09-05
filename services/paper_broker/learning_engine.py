@@ -35,7 +35,7 @@ class StrategyLearningEngine:
             diff_pct = abs(trade.avg_entry_price - trade.planned_entry) / trade.planned_entry
             entry_eff = max(0.50, min(1.0, 1.0 - diff_pct * 3.0))
         else:
-            entry_eff = 0.95
+            entry_eff = 0.0
 
         # 2. Exit Efficiency: How much of favorable move did we capture?
         if trade.MFE > 0 and trade.net_return_pct > 0:
@@ -44,11 +44,11 @@ class StrategyLearningEngine:
             # For loss, high efficiency means we cut loss quickly before MAE worsened
             exit_eff = min(1.0, max(0.60, 1.0 - abs(trade.net_return_pct) / max(trade.MAE, 0.01)))
         else:
-            exit_eff = 0.85
+            exit_eff = 0.0
 
         # 3. Process Quality Score (0 - 100)
         # Evaluates if the trade strictly adhered to risk budget, stops, and execution rules
-        process_score = 90.0
+        process_score = 100.0
         if trade.initial_risk_pct_nav > 0.40:
             process_score -= 15.0  # Over-risked
         if trade.slippage_cost > (trade.gross_buy_value * 0.005):
@@ -58,7 +58,7 @@ class StrategyLearningEngine:
         elif trade.exit_reason in ["TARGET_1", "TARGET_2", "TRAILING_STOP"]:
             process_score += 5.0
 
-        process_score = max(40.0, min(98.0, process_score))
+        process_score = max(0.0, min(100.0, process_score))
 
         # 4. Process vs Outcome Type (Eliminating Outcome Bias)
         is_win = trade.outcome_status == "WIN"
@@ -69,17 +69,17 @@ class StrategyLearningEngine:
 
         # 5. Descriptive Insights (Persian)
         if outcome_type == "GOOD_PROCESS_WIN":
-            what_worked = f"ورود منطبق بر سقف ریسک ۰.۳۵٪ سبد و اصابت تارگت سود در بازه زمانی استاندارد ({trade.holding_sessions} جلسه)."
-            what_failed = "مورد بازدارنده‌ای مشاهده نشد؛ مدیریت موقعیت طبق ضوابط سیستم اجرا شد."
+            what_worked = f"معامله پس از {trade.holding_sessions} جلسه با {trade.realized_R:+.2f}R بسته شد و کنترل‌های قابل‌اندازه‌گیری امتیاز فرآیند {process_score:.1f} گرفتند."
+            what_failed = "برای نسبت‌دادن نتیجه به یک عامل مشخص، نمونه‌های مشابه بیشتری لازم است."
         elif outcome_type == "GOOD_PROCESS_LOSS":
-            what_worked = "حد ضرر فعال شد و از افت بیشتر سرمایه (کنترل ریسک تا حداکثر ۱R) صیانت گردید. فرآیند کاملاً منظم بود."
-            what_failed = f"واکنش غیرمنتظره بازار یا چرخش کوتاه‌مدت نقدینگی در رژیم {trade.market_regime_at_entry} مانع رشد قیمت شد."
+            what_worked = f"زیان در {trade.realized_R:+.2f}R بسته شد؛ دادهٔ ثبت‌شده کنترل ریسک را نشان می‌دهد."
+            what_failed = f"سیگنال در رژیم ثبت‌شدهٔ {trade.market_regime_at_entry} به بازده مثبت نرسید؛ علت بازار از این رکورد به‌تنهایی قابل استنتاج نیست."
         elif outcome_type == "BAD_PROCESS_WIN":
-            what_worked = f"رژیم صعودی پرقدرت بازار سود {trade.net_return_pct:+.2f}٪ را رقم زد."
-            what_failed = "معامله با عدول نسبی از پارامترهای ورود یا اسلیپیج بالا همراه بود؛ موفقیت نتیجه جو بازار بود نه انضباط شخصی."
+            what_worked = f"بازده خالص ثبت‌شده {trade.net_return_pct:+.2f}٪ بود."
+            what_failed = "با وجود سود، یکی از کنترل‌های قابل‌اندازه‌گیری ریسک/اجرا نقض شده است؛ علت دقیق باید از timeline بررسی شود."
         else:  # BAD_PROCESS_LOSS
-            what_worked = "خروج نهایی مانع نابودی کامل سودهای قبلی شد."
-            what_failed = "ورود زودهنگام یا عدم همپوشانی استراتژی با حجم معاملات منجر به خروج با زیان شد."
+            what_worked = "خروج ثبت و حسابداری معامله نهایی شده است."
+            what_failed = "معامله زیان‌ده بوده و حداقل یک کنترل قابل‌اندازه‌گیری ریسک/اجرا نقض شده است؛ علت بدون شواهد بیشتر حدس زده نمی‌شود."
 
         post_mortem = TradePostMortem(
             trade_id=trade.id,
@@ -93,8 +93,11 @@ class StrategyLearningEngine:
             exit_quality_fa=f"راندمان خروج {exit_eff * 100:.1f}٪ — خروج در قیمت {trade.avg_exit_price:,.0f} ریال با دلیل {trade.exit_reason}.",
             position_sizing_quality_fa=f"تخصیص {trade.position_weight_at_entry * 100:.1f}٪ از کل پورتفو با ریسک اولیه {trade.initial_risk_pct_nav:.2f}٪ ارزش دارایی.",
             execution_quality_fa=f"اسلیپیج کل: {trade.slippage_cost / 10:,.0f} تومان ({((trade.slippage_cost / max(trade.gross_buy_value, 1.0)) * 100):.2f}٪ از کل معامله).",
-            risk_compliance_fa="رعایت ۱۰۰٪ سقف صنعت ۱۸٪ و کف نقدینگی صیانت‌شده ۳۰٪ در لحظه ورود.",
-            unexpected_market_behavior_fa="عدم مشاهده ناهنجاری صف و اجرای روان در چارچوب حراج پیوسته.",
+            risk_compliance_fa=(
+                f"ریسک اولیه ثبت‌شده {trade.initial_risk_pct_nav:.2f}٪ از NAV است؛ "
+                "انطباق سقف صنعت و نقدینگی فقط با DecisionAudit همان لحظه قابل اثبات است."
+            ),
+            unexpected_market_behavior_fa="از رکورد معامله به‌تنهایی نمی‌توان رفتار غیرمنتظره بازار یا وضعیت صف را اثبات کرد.",
         )
         db.add(post_mortem)
         db.flush()
@@ -110,7 +113,7 @@ class StrategyLearningEngine:
             lesson1 = StructuredLesson(
                 trade_id=trade.id,
                 category="ENTRY",
-                finding_fa=f"در نماد {trade.symbol} با استراتژی {trade.strategy_name_fa}، ورود در نزدیکی سقف کانال بدون افزایش ۱.۸ برابری حجم موجب شکست شکست قیمتی شد.",
+                finding_fa=f"معامله {trade.symbol} با استراتژی {trade.strategy_name_fa} در حد ضرر و با {trade.realized_R:+.2f}R بسته شد.",
                 evidence_data={
                     "strategy_id": trade.strategy_id,
                     "symbol": trade.symbol,
@@ -118,8 +121,8 @@ class StrategyLearningEngine:
                     "holding_sessions": trade.holding_sessions,
                     "mae_pct": trade.MAE,
                 },
-                confidence_pct=88.5,
-                action_candidate_fa="افزودن فیلتر حجم حداقل ۱.۸x میانگین ۲۰ روزه برای تایید ورود در استراتژی‌های Breakout.",
+                confidence_pct=20.0,
+                action_candidate_fa="این الگوی ورود را در حداقل ۲۰ معامله و دو رژیم بازار خوشه‌بندی و سپس فیلتر کاندید را تعریف کنید.",
                 requires_validation=True,
             )
             db.add(lesson1)
@@ -131,23 +134,13 @@ class StrategyLearningEngine:
                 strategy_key=trade.strategy_id,
                 strategy_name_fa=trade.strategy_name_fa,
                 champion_version=trade.strategy_version,
-                challenger_version=f"{trade.strategy_version}.1-vol-filter",
+                challenger_version=f"{trade.strategy_version}.1-research",
                 status="PROPOSED",
-                hypothesis_fa=f"افزودن فیلتر تایید حجم (Vol Z-Score >= 1.8) به استراتژی {trade.strategy_name_fa} نرخ برد را ۶٪ و امید ریاضی را +0.15R ارتقا می‌دهد.",
-                parameter_changes={"min_volume_multiplier": 1.8, "min_adx": 25.0},
-                backtest_metrics={
-                    "historical_win_rate": 62.4,
-                    "historical_profit_factor": 1.94,
-                    "historical_expectancy_R": 0.48,
-                    "sample_size": 84,
-                },
-                oos_metrics={
-                    "oos_win_rate": 59.1,
-                    "oos_profit_factor": 1.76,
-                    "oos_expectancy_R": 0.39,
-                    "oos_sample_size": 32,
-                },
-                sample_sufficiency="EVALUATING",
+                hypothesis_fa=f"بررسی شود آیا یک فیلتر ورودی قابل‌اندازه‌گیری برای {trade.strategy_name_fa} می‌تواند زیان‌های حد ضرر را بدون کاهش بیش‌ازحد فرصت‌ها کم کند.",
+                parameter_changes={},
+                backtest_metrics={},
+                oos_metrics={},
+                sample_sufficiency="INSUFFICIENT_SAMPLE",
             )
             db.add(prop)
 
@@ -155,7 +148,7 @@ class StrategyLearningEngine:
             lesson2 = StructuredLesson(
                 trade_id=trade.id,
                 category="EXIT",
-                finding_fa=f"خروج پله‌ای (۵۰٪ در تارگت ۱ و ۵۰٪ با تریلینگ‌استاپ) در استراتژی {trade.strategy_name_fa} بازده نهایی را نسبت به خروج یکجا ۲۲٪ افزایش داد.",
+                finding_fa=f"معامله {trade.symbol} با استراتژی {trade.strategy_name_fa} با {trade.realized_R:+.2f}R بسته شد.",
                 evidence_data={
                     "strategy_id": trade.strategy_id,
                     "symbol": trade.symbol,
@@ -163,13 +156,13 @@ class StrategyLearningEngine:
                     "realized_R": trade.realized_R,
                     "mfe_pct": trade.MFE,
                 },
-                confidence_pct=92.0,
-                action_candidate_fa="تثبیت الگوی خروج دومرحله‌ای برای استراتژی‌های پیرو روند در رژیم‌های Risk-On.",
+                confidence_pct=20.0,
+                action_candidate_fa="اثر قواعد خروج را فقط با بازپخش همان مسیر قیمت و مقایسهٔ counterfactual روی نمونه کافی ارزیابی کنید.",
                 requires_validation=True,
             )
             db.add(lesson2)
 
-    def evaluate_sample_sufficiency(self, n_samples: int, n_regimes: int = 3) -> tuple[SampleSufficiency, str]:
+    def evaluate_sample_sufficiency(self, n_samples: int, n_regimes: int = 0) -> tuple[SampleSufficiency, str]:
         """Calculates statistical sample sufficiency."""
         if n_samples < 20 or n_regimes < 2:
             return SampleSufficiency.INSUFFICIENT_SAMPLE, "نمونه ناکافی (حداقل ۲۰ معامله در ۲ رژیم بازار لازم است)"

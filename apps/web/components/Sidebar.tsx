@@ -26,6 +26,7 @@ interface SidebarProps {
   onSelectTab: (tab: NavTab) => void;
   opportunityCount: number;
   openPositionsCount?: number;
+  ownerName?: string;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -33,6 +34,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onSelectTab,
   opportunityCount,
   openPositionsCount = 0,
+  ownerName = "",
 }) => {
   const menuItems = [
     { id: "overview", label: "داشبورد اجرایی", icon: LayoutDashboard },
@@ -45,6 +47,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   return (
     <aside
+      className="app-sidebar"
       style={{
         width: "260px",
         backgroundColor: "var(--bg-secondary)",
@@ -93,7 +96,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       </div>
 
       {/* Navigation Links */}
-      <nav style={{ padding: "1rem 0.75rem", display: "flex", flexDirection: "column", gap: "0.35rem", flex: 1 }}>
+      <nav className="app-sidebar-nav" style={{ padding: "1rem 0.75rem", display: "flex", flexDirection: "column", gap: "0.35rem", flex: 1 }}>
         {menuItems.map((item) => {
           const Icon = item.icon;
           const isActive = activeTab === item.id;
@@ -158,6 +161,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {/* Footer Info & Logout */}
       <div
+        className="app-sidebar-footer"
         style={{
           padding: "1rem 1.25rem",
           borderTop: "1px solid var(--border-subtle)",
@@ -171,7 +175,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
             <div style={{ width: 8, height: 8, borderRadius: "50%", backgroundColor: "var(--tse-green)" }} />
             <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
-              موتور معاملاتی فعال
+              گردآوری داده فعال • معامله تابع گیت‌ها
             </span>
           </div>
           <button
@@ -179,8 +183,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
               try {
                 await fetch("/api/v1/auth/logout", { method: "POST" });
               } catch (_) {}
-              localStorage.removeItem("radar_auth_token");
-              localStorage.removeItem("radar_auth_user");
               window.location.reload();
             }}
             title="خروج از حساب کاربری"
@@ -200,6 +202,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <LogOut size={13} color="#ef4444" />
             <span style={{ color: "#ef4444" }}>خروج</span>
           </button>
+        </div>
+        <div style={{ fontSize: "0.72rem", color: "var(--text-secondary)" }}>
+          مالک سامانه: <strong style={{ color: "var(--text-primary)" }}>{ownerName || "نشست تأیید نشده"}</strong>
         </div>
         <div style={{ fontSize: "0.7rem", color: "var(--text-muted)" }}>
           ورژن ۲.۵ • بورس اوراق بهادار تهران

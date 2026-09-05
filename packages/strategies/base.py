@@ -1,6 +1,6 @@
 """Base strategy protocol and candidate evaluation structures."""
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -16,6 +16,7 @@ class StrategyContext:
     market_regime: str
     allowed_min: float
     allowed_max: float
+    fundamental: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass
@@ -31,6 +32,7 @@ class CandidateResult:
     time_stop_sessions: int
     reason_fa: str
     risk_flags_fa: list[str]
+    family: str = "unclassified"
 
 
 class BaseStrategy(ABC):

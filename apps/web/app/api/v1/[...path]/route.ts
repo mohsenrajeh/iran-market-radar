@@ -66,38 +66,11 @@ async function handleProxy(req: NextRequest, { params }: { params: { path: strin
       headers: responseHeaders,
     });
   } catch (error: any) {
-    // If connection to backend fails, try fallback to 127.0.0.1:8742 or api:8000
-    try {
-      const fallbackBase = backendBase.includes("api:8000") ? "http://127.0.0.1:8742" : "http://api:8000";
-      const fallbackUrl = `${fallbackBase}/api/v1/${subPath}${searchParams}`;
-
-      const fallbackRes = await fetch(fallbackUrl, {
-        method,
-        headers,
-        body,
-        cache: "no-store",
-      });
-
-      const fbData = await fallbackRes.arrayBuffer();
-      const fbHeaders = new Headers();
-      fallbackRes.headers.forEach((val, key) => {
-        if (!["content-encoding", "transfer-encoding"].includes(key.toLowerCase())) {
-          fbHeaders.set(key, val);
-        }
-      });
-
-      return new NextResponse(fbData, {
-        status: fallbackRes.status,
-        statusText: fallbackRes.statusText,
-        headers: fbHeaders,
-      });
-    } catch (fallbackError: any) {
-      console.error(`[API Proxy Error] Failed to proxy to ${targetUrl}:`, error?.message);
-      return NextResponse.json(
-        { detail: `خطا در برقراری ارتباط با وب‌سرویس بک‌اند رادار: ${error?.message || "سرور پاسخگو نیست"}` },
-        { status: 502 }
-      );
-    }
+    console.error(`[API Proxy Error] Failed to proxy configured backend:`, error?.message);
+    return NextResponse.json(
+      { detail: "خطا در برقراری ارتباط با وب‌سرویس بک‌اند رادار." },
+      { status: 502 }
+    );
   }
 }
 

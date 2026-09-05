@@ -52,8 +52,11 @@ export const OpportunityDrawer: React.FC<DrawerProps> = ({
   };
 
   const targets = opportunity.exit_plan?.targets || [];
-  const tp1 = targets[0] || (opportunity.entry_zone?.high ? Math.round(opportunity.entry_zone.high * 1.035) : null);
-  const tp2 = targets[1] || (opportunity.entry_zone?.high ? Math.round(opportunity.entry_zone.high * 1.07) : null);
+  const tp1 = targets[0] ?? null;
+  const tp2 = targets[1] ?? null;
+  const fundamentalGate = opportunity.decision_components?.fundamental_gate;
+  const fundamentalMetrics = fundamentalGate?.metrics || {};
+  const fundamentalSources = fundamentalGate?.provider_names || fundamentalGate?.source_keys || [];
 
   return (
     <div
@@ -119,11 +122,11 @@ export const OpportunityDrawer: React.FC<DrawerProps> = ({
                   fontWeight: 600,
                 }}
               >
-                افق {opportunity.horizon ? opportunity.horizon.replace("d", "") : "۵"} روزه
+                {opportunity.horizon ? `افق ${opportunity.horizon.replace("d", "")} روزه` : "افق ثبت نشده"}
               </span>
             </div>
             <div style={{ fontSize: "0.82rem", color: "var(--text-muted)", marginTop: "0.3rem" }}>
-              {opportunity.name_fa} • صنعت {opportunity.sector || "بازار بورس"}
+              {opportunity.name_fa} • صنعت {opportunity.sector || "ثبت نشده"}
             </div>
           </div>
           <button
@@ -223,16 +226,16 @@ export const OpportunityDrawer: React.FC<DrawerProps> = ({
               </div>
 
               <div style={{ padding: "0.6rem 0.8rem", backgroundColor: "var(--bg-secondary)", borderRadius: "6px" }}>
-                <div style={{ color: "var(--text-muted)", fontSize: "0.72rem", marginBottom: "0.2rem" }}>تارگت اول (سیو سود +۳.۵٪)</div>
+                <div style={{ color: "var(--text-muted)", fontSize: "0.72rem", marginBottom: "0.2rem" }}>تارگت اول ثبت‌شده</div>
                 <div style={{ fontWeight: 700, color: "var(--tse-green)" }} className="tabular-num">
                   {tp1 ? `${tp1.toLocaleString("fa-IR")} ریال` : "-"}
                 </div>
               </div>
 
               <div style={{ padding: "0.6rem 0.8rem", backgroundColor: "var(--bg-secondary)", borderRadius: "6px" }}>
-                <div style={{ color: "var(--text-muted)", fontSize: "0.72rem", marginBottom: "0.2rem" }}>حد سود نهایی (تارگت ۲)</div>
+                <div style={{ color: "var(--text-muted)", fontSize: "0.72rem", marginBottom: "0.2rem" }}>حد سود نهایی ثبت‌شده</div>
                 <div style={{ fontWeight: 700, color: "var(--tse-green)" }} className="tabular-num">
-                  {(tp2 || Math.round((opportunity.entry_zone?.high || 1000) * 1.07)).toLocaleString("fa-IR")} ریال (+۷.۰٪)
+                  {tp2 ? `${tp2.toLocaleString("fa-IR")} ریال` : "—"}
                 </div>
               </div>
             </div>
@@ -245,8 +248,8 @@ export const OpportunityDrawer: React.FC<DrawerProps> = ({
                 <Scale size={16} color="var(--tse-green)" />
                 <span>شاخص‌های ارزندگی بنیادی و سلامت مالی</span>
               </div>
-              <span style={{ fontSize: "0.72rem", backgroundColor: "var(--tse-green-subtle)", color: "var(--tse-green)", padding: "2px 8px", borderRadius: "4px", fontWeight: 700 }}>
-                ارزنده با حباب منفی
+              <span style={{ fontSize: "0.72rem", backgroundColor: fundamentalGate?.passed ? "var(--tse-green-subtle)" : "var(--tse-amber-subtle)", color: fundamentalGate?.passed ? "var(--tse-green)" : "var(--tse-amber)", padding: "2px 8px", borderRadius: "4px", fontWeight: 700 }}>
+                {fundamentalGate?.passed ? "گیت بنیادی تأییدشده" : "گیت بنیادی تأیید نشده"}
               </span>
             </div>
 
@@ -254,30 +257,34 @@ export const OpportunityDrawer: React.FC<DrawerProps> = ({
               <div style={{ padding: "0.5rem 0.75rem", backgroundColor: "var(--bg-secondary)", borderRadius: "6px" }}>
                 <div style={{ color: "var(--text-muted)", fontSize: "0.7rem" }}>P/E سهم (گروه)</div>
                 <div style={{ fontWeight: 800, color: "var(--text-primary)", marginTop: "2px" }} className="tabular-num">
-                  5.6 <span style={{ fontSize: "0.68rem", color: "var(--text-muted)" }}>(6.8)</span>
+                  {fundamentalMetrics.p_e_ratio ?? "—"} <span style={{ fontSize: "0.68rem", color: "var(--text-muted)" }}>({fundamentalMetrics.sector_p_e ?? "—"})</span>
                 </div>
               </div>
 
               <div style={{ padding: "0.5rem 0.75rem", backgroundColor: "var(--bg-secondary)", borderRadius: "6px" }}>
-                <div style={{ color: "var(--text-muted)", fontSize: "0.7rem" }}>بازده حقوق صاحبان (ROE)</div>
-                <div style={{ fontWeight: 800, color: "var(--tse-green)", marginTop: "2px" }} className="tabular-num">
-                  ۳۸.۵٪
-                </div>
-              </div>
-
-              <div style={{ padding: "0.5rem 0.75rem", backgroundColor: "var(--bg-secondary)", borderRadius: "6px" }}>
-                <div style={{ color: "var(--text-muted)", fontSize: "0.7rem" }}>حاشیه سود خالص</div>
+                <div style={{ color: "var(--text-muted)", fontSize: "0.7rem" }}>رشد فروش ماهانه سالانه</div>
                 <div style={{ fontWeight: 800, color: "var(--text-primary)", marginTop: "2px" }} className="tabular-num">
-                  ۲۸.۰٪
+                  {fundamentalMetrics.monthly_sales_growth_yoy != null ? `${fundamentalMetrics.monthly_sales_growth_yoy.toLocaleString("fa-IR")}٪` : "—"}
+                </div>
+              </div>
+
+              <div style={{ padding: "0.5rem 0.75rem", backgroundColor: "var(--bg-secondary)", borderRadius: "6px" }}>
+                <div style={{ color: "var(--text-muted)", fontSize: "0.7rem" }}>بدهی به حقوق صاحبان سهام</div>
+                <div style={{ fontWeight: 800, color: "var(--text-primary)", marginTop: "2px" }} className="tabular-num">
+                  {fundamentalMetrics.debt_to_equity ?? "—"}
                 </div>
               </div>
 
               <div style={{ padding: "0.5rem 0.75rem", backgroundColor: "var(--bg-secondary)", borderRadius: "6px" }}>
                 <div style={{ color: "var(--text-muted)", fontSize: "0.7rem" }}>سلامت مالی پیوتروسکی</div>
                 <div style={{ fontWeight: 800, color: "var(--tse-green)", marginTop: "2px" }} className="tabular-num">
-                  ۸ از ۹ (عالی)
+                  {fundamentalMetrics.piotroski_f_score != null ? `${fundamentalMetrics.piotroski_f_score.toLocaleString("fa-IR")} از ۹` : "—"}
                 </div>
               </div>
+            </div>
+            <div style={{ marginTop: "0.65rem", fontSize: "0.74rem", color: "var(--text-secondary)" }}>
+              منابع ثبت‌شده: {fundamentalSources.length ? fundamentalSources.join("، ") : "هیچ منبع سالمی ثبت نشده"}
+              {fundamentalGate?.as_of_utc ? ` • زمان مبنا: ${fundamentalGate.as_of_utc}` : ""}
             </div>
           </div>
 
@@ -319,7 +326,7 @@ export const OpportunityDrawer: React.FC<DrawerProps> = ({
                       </span>
                     </div>
                     <div style={{ fontSize: "0.78rem", color: "var(--text-secondary)", lineHeight: "1.5" }}>
-                      {sv.reason_fa || "تحلیل الگوها و میانگین‌ها وضعیت صعودی را تأیید می‌کند."}
+                      {sv.reason_fa || "دلیل ماشینی برای این رأی ثبت نشده است."}
                     </div>
                   </div>
                 );
@@ -377,11 +384,11 @@ export const OpportunityDrawer: React.FC<DrawerProps> = ({
           <button
             className="btn-primary"
             onClick={handlePlaceOrder}
-            disabled={loading}
+            disabled={loading || opportunity.actionable !== true}
             style={{ flex: 1, justifyContent: "center", padding: "0.75rem 1rem", fontSize: "0.88rem", fontWeight: 700 }}
           >
             <ShoppingCart size={18} />
-            <span>{loading ? "در حال ثبت سفارش..." : "خرید آزمایشی در پورتفو (ثبت معامله)"}</span>
+            <span>{loading ? "در حال ثبت سفارش..." : opportunity.actionable === true ? "ثبت سفارش خرید کاغذی" : "سیگنال غیرقابل معامله"}</span>
           </button>
           <button className="btn-outline" onClick={onClose} style={{ padding: "0.75rem 1.25rem", fontSize: "0.85rem" }}>
             بستن
@@ -391,4 +398,3 @@ export const OpportunityDrawer: React.FC<DrawerProps> = ({
     </div>
   );
 };
-

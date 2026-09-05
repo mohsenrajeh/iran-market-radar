@@ -1,87 +1,45 @@
-# سامانه رادار بازار سرمایه ایران — گزارش کامل پیاده‌سازی و یکپارچه‌سازی
+# Walkthrough عملیاتی ایران مارکت رادار
 
-سیستم به صورت کامل در تمامی لایه‌ها (دریافت داده، مهندسی ویژگی‌ها و اندیکاتورها، آزمایشگاه استراتژی‌ها، موتور خودکار معاملات آزمایشی، ارزیابی دقت اندیکاتورها، لاگ یادگیری ماشین و رابط کاربری فارسی) پیاده‌سازی و راه‌اندازی گردید.
+## وضعیت کمپین
 
----
+کمپین جاری با سرمایه ۱۰ میلیارد تومان (۱۰۰ میلیارد ریال) ایجاد شده است. پورتفوی قدیمی آرشیو و fixtureها بدون حذف فیزیکی قرنطینه شده‌اند. در شروع کمپین، تعداد موقعیت و معامله معتبر صفر است و kill switch تا تکمیل داده رسمی روشن می‌ماند.
 
-## ۱. بسته اندیکاتورهای تکنیکال و تابلوخوانی پیشرفته (۱۲ اندیکاتور + الگوهای شمعی)
+## جریان دقیقه‌ای بازار
 
-در فایل [`packages/feature_engine/indicators.py`](file:///d:/My%20Project/04_Trading-AI/iran-market-radar/packages/feature_engine/indicators.py) توابع زیر به صورت قطعی، بدون نشت داده و مبتنی بر `numpy` پیاده‌سازی شدند:
+در جلسه ۰۹:۰۰ تا ۱۲:۳۰ تهران:
 
-| دسته‌بندی | اندیکاتورها و توابع | خروجی‌ها |
-| :--- | :--- | :--- |
-| **روند (Trend)** | `compute_ichimoku`, `compute_supertrend`, `compute_adx`, `compute_ema` | Tenkan, Kijun, Senkou A/B, Chikou, Supertrend Line & Direction, ADX, +DI, -DI |
-| **مومنتوم و نوسانگرها** | `compute_rsi`, `compute_stochastic_rsi`, `compute_macd`, `compute_cci`, `compute_williams_r` | RSI(14), StochRSI(K/D), MACD Hist, CCI(20), Williams %R |
-| **حجم و جریان نقدینگی** | `compute_mfi`, `compute_obv`, `compute_cmf`, `compute_robust_volume_zscore` | MFI(14), OBV Slope 20d, Chaikin Money Flow (CMF 20), Volume Z-Score |
-| **کانال‌ها و فشردگی نوسان** | `compute_bollinger_bands`, `compute_keltner_channels`, `compute_donchian_channels` | BB Squeeze (تلاقی بولینگر و کلدنر), Donchian Breakout |
-| **تابلوخوانی بازار ایران** | فیلترهای حقیقی/حقوقی در `compute_symbol_features` | نسبت قدرت سرانه خریدار حقیقی، خالص ورود پول حقیقی، تداوم ورود پول |
-| **الگوهای کندل‌استیک** | `detect_candlestick_patterns` | چکش (Hammer)، اینگولفینگ صعودی/نزولی، دوجی، ستاره صبحگاهی |
+1. دریافت market watch و شاخص‌ها از منبع رسمی؛
+2. ثبت timestamp منبع، دامنه مجاز و receipt؛
+3. کنترل freshness، پوشش ۹۸٪ و نبود fixture؛
+4. محاسبه رژیم، ویژگی‌ها و ۱۲ استراتژی روی حداقل ۲۶۰ جلسه؛
+5. رتبه‌بندی مقطعی واقعی و گیت چندخانواده‌ای؛
+6. اتصال شواهد بنیادی با حداقل دو upstream مستقل؛
+7. کالیبراسیون خارج از نمونه، نقدشوندگی و مدیریت ریسک؛
+8. ثبت سفارش کاغذی و اجرای آن فقط روی snapshot رسمی بعدی.
 
----
+خارج از ساعت بازار، چرخه خرید جدید اجرا نمی‌شود. داده آخر می‌تواند با برچسب stale نمایش داده شود، اما سفارش تولید نمی‌کند.
 
-## ۲. آزمایشگاه و رجیستری ۱۲ استراتژی کمّی (Strategies)
+## مدیریت موقعیت
 
-در رجیستری [`packages/strategies/registry.py`](file:///d:/My%20Project/04_Trading-AI/iran-market-radar/packages/strategies/registry.py) تمامی ۱۲ استراتژی ثبت و فعال شدند:
+هر عملیات یکی از حالت‌های `SUBMITTED`، `PARTIALLY_FILLED`، `FILLED`، `CANCELLED` یا `REJECTED` دارد. cash و position فقط در fill تغییر می‌کنند.
 
-1. **S01: مومنتوم مقطعی (Cross-Sectional Momentum)** — رتبه‌بندی بازدهی ۵ و ۲۰ روزه
-2. **S02: روند سری زمانی (Time-Series Trend)** — ساختار تراز میانگین‌های متحرک EMA
-3. **S03: شکست مقاومت با تایید حجم (Breakout Volume)** — شکست سقف با حجم غیرعادی
-4. **S04: پولبک به میانگین‌های متحرک (Trend Pullback)** — اصلاح قیمتی به EMA20 در روند صعودی
-5. **S05: بازگشت به میانگین برگزیده (Selective Mean Reversion)** — اشباع فروش RSI و لبه پایینی بولینگر
-6. **S06: جهش حجم غیرعادی (Volume Anomaly)** — ورود حجم مشکوک با Z-Score > 2.0
-7. **S07: انباشت پول حقیقی (Client Flow Accumulation)** — قدرت سرانه خریدار حقیقی > 1.3
-8. **S08: ایچیموکو — روند ابری (Ichimoku Cloud Trend)** — قیمت بالای ابر کومو + کراس تنکان و کیجون + ADX > 25
-9. **S09: چرخش صنایع برتر (Sector Rotation)** — صنایع پیشرو با بازدهی نسبی مثبت
-10. **S10: فشردگی بولینگر — انفجار نوسان (BB Squeeze Breakout)** — خروج باند بولینگر از کانال کلدنر همراه جهش حجم
-11. **S11: تایید چندگانه اندیکاتوری (Multi-Indicator Confluence)** — تایید همزمان حداقل ۵ اندیکاتور از ۸ اندیکاتور مستقل
-12. **S12: واگرایی پول هوشمند (Smart Money Divergence)** — افت قیمت با افزایش همزمان MFI، شیب مثبت OBV و خرید سرانه حقیقی
+- خرید: سیگنال، خانواده‌های رأی‌دهنده، بنیادی، ریسک، حد ضرر و اهداف ثبت می‌شود.
+- افزودن: فقط روی موقعیت برنده و در سقف وزن/نقدشوندگی؛ averaging down ممنوع است.
+- کم‌کردن: دلیل کاهش ریسک یا ذخیره سود همراه مقدار و fill ثبت می‌شود.
+- فروش: stop، target، time stop، ابطال سیگنال، تغییر رژیم، kill switch یا خروج دستی.
+- پایان: NAV، هزینه‌ها، R، MFE/MAE، timeline و post-mortem از رکورد واقعی ساخته می‌شود.
 
----
+## صفحات
 
-## ۳. موتور خودکار معاملات آزمایشی (Auto Paper Trader) و لاگ ML
+- نمای بازار: شاخص، breadth، freshness و علت BLOCKED.
+- فرصت‌ها: فقط سیگنال‌های API؛ مقدار ناموجود با «—».
+- بنیادی: نسبت‌ها و اطلاعیه‌ها فقط با receipt و source key.
+- Paper Trading: سرمایه، سفارش‌ها، موقعیت‌ها، equity curve و تاریخچه کمپین فعال.
+- Trading Lab: آمار واقعی معامله‌های بسته، کفایت نمونه و Research Queue.
+- Health: وضعیت measured هر منبع، آخرین موفقیت، خطا و گیت معامله.
 
-در فایل‌های [`services/paper_broker/auto_trader.py`](file:///d:/My%20Project/04_Trading-AI/iran-market-radar/services/paper_broker/auto_trader.py) و [`services/paper_broker/scheduler.py`](file:///d:/My%20Project/04_Trading-AI/iran-market-radar/services/paper_broker/scheduler.py):
+## وضعیت منبع در ۲۰۲۶-۰۸-۱۷
 
-* **سرمایه اولیه:** **۱ میلیارد تومان** (۱۰٬۰۰۰٬۰۰۰٬۰۰۰ ریال).
-* **اجرای خودکار ساعتی:** برنامه‌ریزی شده با کرون‌جاب ساعتی.
-* **ثبت دقیق اطلاعات هر معامله:**
-  * **دلیل خرید و استراتژی ورود (Entry Rationale & Confluence)**
-  * **سرمایه وارد شده (به میلیون تومان و ریال، تعداد سهم و قیمت ورود)**
-  * **مدت باز بودن معامله (Days Open)**
-  * **تخمین زمان رسیدن به سود (Expected Days to Target / Time Stop)**
-  * **موقعیت در رژیم بازار (Market Regime: صعودی پرقدرت، خنثی، استراحت، توزیع)**
-  * **روش تصمیم‌گیری و درصد ریسک پورتفو (Risk % و نسبت سود به زیان R/R)**
-  * **درس آموخته برای هوش مصنوعی (AI Post-Mortem Lesson)**
-* **ارزیابی عملکرد اندیکاتورها ([`attribution.py`](file:///d:/My%20Project/04_Trading-AI/iran-market-radar/services/paper_broker/attribution.py)):** محاسبه میزان صحت و دقت (Precision) هر یک از اندیکاتورها در سوددهی نهایی معاملات.
+Tindex و میزبان BourseView پس از حذف proxy خراب محیط قابل دسترسی شدند، اما TSETMC در مسیر TLS/VPN همچنان شکست خورد. این نتیجه اعتبار credential را رد یا تأیید نمی‌کند. تا موفقیت contract-test، قیمت جاری و معامله جدید `BLOCKED` هستند.
 
----
-
-## ۴. رابط کاربری جامع فرانت‌اند ([`PaperTradingView.tsx`](file:///d:/My%20Project/04_Trading-AI/iran-market-radar/apps/web/components/PaperTradingView.tsx))
-
-داشبورد کامل با تب‌های تعاملی و طراحی حرفه‌ای RTL:
-* **تب پوزیشن‌های باز:** نمایش لحظه‌ای سرمایه وارد شده، حد ضرر، تارگت، روزهای باز، تخمین روزهای باقیمانده تا تارگت، درصد ریسک، نسبت R/R، روش تصمیم‌گیری و دلیل ورود.
-* **تب نمودار رشد پورتفو (Equity Curve):** نمودار تعاملی SVG با خط مرجع ۱ میلیارد تومان و گرادیان بازدهی.
-* **تب تاریخچه معاملات و دیتای ML:** جدول کامل لاگ‌ها همراه با کالبدشکافی هوش مصنوعی و درس آموخته هر معامله.
-* **تب ارزیابی دقت اندیکاتورها:** مقایسه تصویری دقت و سودآوری تجمعی ۱۲ اندیکاتور تکنیکال.
-* **کنترلر موتور:** کلید قطع اضطراری (Kill-Switch) و دکمه اجرای دستی چرخه معاملاتی.
-
----
-
-## ۵. آزمون‌ها و صحت‌سنجی (Verification)
-
-* **۳۶ تست واحد و یکپارچه در Pytest با موفقیت ۱۰۰٪ پاس شدند:**
-  ```text
-  tests\test_advanced_indicators.py ...........   [ 30%]
-  tests\test_api.py .....                         [ 44%]
-  tests\test_auto_trader.py .....                 [ 58%]
-  tests\test_backtest.py .                        [ 61%]
-  tests\test_calibration.py ..                    [ 66%]
-  tests\test_features.py .                        [ 69%]
-  tests\test_market_rules.py ....                 [ 80%]
-  tests\test_paper_broker.py ..                   [ 86%]
-  tests\test_persian.py ....                      [ 97%]
-  tests\test_strategies.py .                      [100%]
-  ============================= 36 passed in 7.99s ==============================
-  ```
-* **بیلد Next.js 14 بدون خطا (0 Errors) تایید شد.**
-* **اجرای واقعی چرخه‌های موتور معاملاتی با پورتفوی ۱ میلیارد تومانی تایید و معاملات کچاد، فخوز، نوری، شبندر، وبملت، فارس، فولاد، فملی و کگل ثبت شدند.**
+راهنمای مسیرهای پشتیبان و proxy در [24_DATA_PROVIDER_CONTRACT.md](24_DATA_PROVIDER_CONTRACT.md) و راه‌اندازی کمپین در [23_PAPER_CAMPAIGN_RUNBOOK.md](23_PAPER_CAMPAIGN_RUNBOOK.md) است.

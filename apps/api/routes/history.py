@@ -1,7 +1,7 @@
 """Closed Trade History API routes, multi-filter search, server pagination, and accounting export."""
 import csv
 import io
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
@@ -12,12 +12,8 @@ from packages.domain.models import (
     TradeExecutionTimeline,
     TradePostMortem,
     StructuredLesson,
-    Portfolio,
-    Position,
     Instrument,
     EODBar,
-    TradeExitReason,
-    TradeOutcomeStatus,
 )
 from packages.domain.schemas import (
     ClosedTradeResponse,
@@ -28,284 +24,10 @@ from packages.domain.schemas import (
     HistorySummaryResponse,
 )
 from packages.shared.database import get_sync_db
-from packages.shared.datetime_utils import now_utc, to_jalali_str
-from services.paper_broker.learning_engine import learning_engine
+from packages.shared.datetime_utils import to_jalali_str
+from services.paper_broker.campaign import get_active_campaign_portfolio
 
 router = APIRouter(prefix="/trade-history", tags=["Closed Trade History"])
-
-
-def _seed_initial_closed_trades_if_empty(db: Session):
-    """Populates diverse historical closed trades with complete execution timelines and post-mortems if empty."""
-    count = db.query(ClosedTradeHistory).count()
-    if count >= 10:
-        return
-
-    port = db.query(Portfolio).first()
-    if not port:
-        port = Portfolio(
-            id="port_default_paper",
-            name="پورتفوی آزمایشی پیش‌فرض (۱ میلیارد تومان)",
-            mode="paper",
-            cash=10_000_000_000.0,
-            initial_cash=10_000_000_000.0,
-        )
-        db.add(port)
-        db.commit()
-
-    base_time = now_utc() - timedelta(days=60)
-    seed_records = [
-        {
-            "symbol": "فولاد", "company": "فولاد مبارکه اصفهان", "sector": "فلزات اساسی",
-            "strategy": "s01_momentum", "strategy_fa": "مومنتوم مقطعی", "strategy_ver": "v1.0",
-            "open_days_ago": 45, "close_days_ago": 38, "holding_sessions": 7,
-            "planned_entry": 2785.0, "avg_entry": 2790.0, "avg_exit": 3100.0, "qty": 300_000,
-            "initial_stop": 2640.0, "final_stop": 2880.0, "target1": 3060.0, "target2": 3250.0,
-            "exit_reason": "TARGET_1", "exit_reason_fa": "اصابت تارگت اول (+۱۱.۱٪)",
-            "regime_entry": "risk_on", "regime_exit": "risk_on",
-            "mfe": 12.8, "mae": 1.4, "decision_method": "شکست مقاومت با تایید حجم ۳x",
-        },
-        {
-            "symbol": "فملی", "company": "ملی صنایع مس ایران", "sector": "فلزات اساسی",
-            "strategy": "s03_breakout", "strategy_fa": "شکست حجم و نوسان", "strategy_ver": "v1.0",
-            "open_days_ago": 40, "close_days_ago": 32, "holding_sessions": 8,
-            "planned_entry": 3650.0, "avg_entry": 3660.0, "avg_exit": 4050.0, "qty": 200_000,
-            "initial_stop": 3460.0, "final_stop": 3800.0, "target1": 4010.0, "target2": 4250.0,
-            "exit_reason": "TRAILING_STOP", "exit_reason_fa": "خروج با تریلینگ‌استاپ بعد از رشد +۱۰.۷٪",
-            "regime_entry": "risk_on", "regime_exit": "risk_on",
-            "mfe": 14.5, "mae": 1.1, "decision_method": "شکست فشردگی بولینگر با حجم غیرعادی",
-        },
-        {
-            "symbol": "شپنا", "company": "پالایش نفت اصفهان", "sector": "فرآورده‌های نفتی",
-            "strategy": "s05_reversion", "strategy_fa": "بازگشت به میانگین انتخابی", "strategy_ver": "v1.0",
-            "open_days_ago": 35, "close_days_ago": 30, "holding_sessions": 5,
-            "planned_entry": 4150.0, "avg_entry": 4160.0, "avg_exit": 3940.0, "qty": 200_000,
-            "initial_stop": 3940.0, "final_stop": 3940.0, "target1": 4560.0, "target2": 4800.0,
-            "exit_reason": "STOP_LOSS", "exit_reason_fa": "اصابت دقیق حد ضرر مجاز (-۵.۳٪)",
-            "regime_entry": "neutral", "regime_exit": "risk_off",
-            "mfe": 1.8, "mae": 5.3, "decision_method": "واگرایی RSI در کف کانال دونچیان",
-        },
-        {
-            "symbol": "نوری", "company": "پتروشیمی نوری", "sector": "محصولات شیمیایی",
-            "strategy": "s07_client_flow", "strategy_fa": "جریان پول هوشمند و تجمیع حقیقی", "strategy_ver": "v1.0",
-            "open_days_ago": 28, "close_days_ago": 16, "holding_sessions": 12,
-            "planned_entry": 35740.0, "avg_entry": 35800.0, "avg_exit": 39400.0, "qty": 35_000,
-            "initial_stop": 33950.0, "final_stop": 37500.0, "target1": 39300.0, "target2": 41500.0,
-            "exit_reason": "TARGET_1", "exit_reason_fa": "اصابت تارگت اول نهایی (+۱۰.۱٪)",
-            "regime_entry": "risk_on", "regime_exit": "risk_on",
-            "mfe": 11.5, "mae": 0.8, "decision_method": "قدرت خریدار حقیقی بالای ۲.۴x و انباشت ۴ روزه",
-        },
-        {
-            "symbol": "کچاد", "company": "معدنی و صنعتی چادرملو", "sector": "استخراج کانه‌های فلزی",
-            "strategy": "s08_ichimoku", "strategy_fa": "ایچیموکو — روند ابری", "strategy_ver": "v1.0",
-            "open_days_ago": 22, "close_days_ago": 14, "holding_sessions": 8,
-            "planned_entry": 4950.0, "avg_entry": 4960.0, "avg_exit": 5450.0, "qty": 180_000,
-            "initial_stop": 4700.0, "final_stop": 5150.0, "target1": 5440.0, "target2": 5700.0,
-            "exit_reason": "TARGET_1", "exit_reason_fa": "اصابت تارگت اول (+۹.۹٪)",
-            "regime_entry": "risk_on", "regime_exit": "neutral",
-            "mfe": 11.8, "mae": 1.2, "decision_method": "شکست ابر کومو و کراس تنکان-کیجون با ADX>28",
-        },
-        {
-            "symbol": "وغدیر", "company": "سرمایه‌گذاری غدیر", "sector": "سرمایه‌گذاری‌ها",
-            "strategy": "s02_trend", "strategy_fa": "روند سری زمانی", "strategy_ver": "v1.0",
-            "open_days_ago": 20, "close_days_ago": 17, "holding_sessions": 3,
-            "planned_entry": 22400.0, "avg_entry": 22450.0, "avg_exit": 21280.0, "qty": 45_000,
-            "initial_stop": 21280.0, "final_stop": 21280.0, "target1": 24640.0, "target2": 26000.0,
-            "exit_reason": "STOP_LOSS", "exit_reason_fa": "اصابت حد ضرر به علت چرخش منفی شاخص",
-            "regime_entry": "neutral", "regime_exit": "risk_off",
-            "mfe": 1.2, "mae": 5.2, "decision_method": "شکست میانگین متحرک ۲۰ روزه",
-        },
-        {
-            "symbol": "وبملت", "company": "بانک ملت", "sector": "بانک‌ها و مؤسسات اعتباری",
-            "strategy": "s06_volume", "strategy_fa": "ناهنجاری حجم معاملات", "strategy_ver": "v1.0",
-            "open_days_ago": 18, "close_days_ago": 10, "holding_sessions": 8,
-            "planned_entry": 1291.0, "avg_entry": 1295.0, "avg_exit": 1430.0, "qty": 500_000,
-            "initial_stop": 1220.0, "final_stop": 1350.0, "target1": 1420.0, "target2": 1520.0,
-            "exit_reason": "TARGET_1", "exit_reason_fa": "اصابت تارگت اول (+۱۰.۴٪)",
-            "regime_entry": "risk_on", "regime_exit": "risk_on",
-            "mfe": 11.4, "mae": 1.0, "decision_method": "ورود پول سنگین با نسبت خریدار ۲.۱x",
-        },
-        {
-            "symbol": "خبهمن", "company": "گروه بهمن", "sector": "خودرو و ساخت قطعات",
-            "strategy": "s10_bb_squeeze", "strategy_fa": "فشردگی بولینگر — انفجار نوسان", "strategy_ver": "v1.0",
-            "open_days_ago": 14, "close_days_ago": 8, "holding_sessions": 6,
-            "planned_entry": 2415.0, "avg_entry": 2420.0, "avg_exit": 2680.0, "qty": 300_000,
-            "initial_stop": 2290.0, "final_stop": 2520.0, "target1": 2650.0, "target2": 2800.0,
-            "exit_reason": "TARGET_1", "exit_reason_fa": "اصابت تارگت اول (+۱۰.۷٪)",
-            "regime_entry": "risk_on", "regime_exit": "risk_on",
-            "mfe": 11.2, "mae": 1.3, "decision_method": "شکست کانال کلتنر با سیگنال سوپرترند صعودی",
-        },
-        {
-            "symbol": "زاگرس", "company": "پتروشیمی زاگرس", "sector": "محصولات شیمیایی",
-            "strategy": "s11_confluence", "strategy_fa": "تأیید چندگانه اندیکاتوری", "strategy_ver": "v1.0",
-            "open_days_ago": 12, "close_days_ago": 6, "holding_sessions": 6,
-            "planned_entry": 210000.0, "avg_entry": 210200.0, "avg_exit": 232000.0, "qty": 5_000,
-            "initial_stop": 199500.0, "final_stop": 220000.0, "target1": 231000.0, "target2": 245000.0,
-            "exit_reason": "TARGET_1", "exit_reason_fa": "اصابت تارگت اول با همگرایی ۷ اندیکاتور",
-            "regime_entry": "risk_on", "regime_exit": "risk_on",
-            "mfe": 11.8, "mae": 0.8, "decision_method": "تایید همزمان ۷ اندیکاتور مستقل (RSI, MACD, OBV, Ichimoku, CMF)",
-        },
-        {
-            "symbol": "فارس", "company": "صنایع پتروشیمی خلیج فارس", "sector": "محصولات شیمیایی",
-            "strategy": "s09_sector_rotation", "strategy_fa": "چرخش و همگرایی صنعت", "strategy_ver": "v1.0",
-            "open_days_ago": 10, "close_days_ago": 3, "holding_sessions": 7,
-            "planned_entry": 11400.0, "avg_entry": 11450.0, "avg_exit": 11600.0, "qty": 70_000,
-            "initial_stop": 10900.0, "final_stop": 11400.0, "target1": 12600.0, "target2": 13400.0,
-            "exit_reason": "TIME_STOP", "exit_reason_fa": "خروج بر اساس زمان (عدم حرکت پس از ۷ جلسه)",
-            "regime_entry": "neutral", "regime_exit": "neutral",
-            "mfe": 2.5, "mae": 1.5, "decision_method": "پیشتازی گروه پتروشیمی در نرخ بازده هفتگی",
-        },
-        {
-            "symbol": "حکشتی", "company": "کشتیرانی جمهوری اسلامی ایران", "sector": "حمل و نقل",
-            "strategy": "s12_smart_money_divergence", "strategy_fa": "واگرایی پول هوشمند", "strategy_ver": "v1.0",
-            "open_days_ago": 8, "close_days_ago": 2, "holding_sessions": 6,
-            "planned_entry": 14500.0, "avg_entry": 14550.0, "avg_exit": 16100.0, "qty": 50_000,
-            "initial_stop": 13900.0, "final_stop": 15200.0, "target1": 15900.0, "target2": 17000.0,
-            "exit_reason": "TARGET_1", "exit_reason_fa": "اصابت تارگت اول (+۱۰.۶٪)",
-            "regime_entry": "risk_on", "regime_exit": "risk_on",
-            "mfe": 11.2, "mae": 0.7, "decision_method": "واگرایی صعودی OBV و MFI در برابر افت قیمت ۵ روزه",
-        },
-    ]
-
-    for rec in seed_records:
-        opened_dt = now_utc() - timedelta(days=rec["open_days_ago"])
-        closed_dt = now_utc() - timedelta(days=rec["close_days_ago"])
-        holding_h = (closed_dt - opened_dt).total_seconds() / 3600.0
-
-        buy_val = rec["avg_entry"] * rec["qty"]
-        sell_val = rec["avg_exit"] * rec["qty"]
-        entry_fee = buy_val * 0.003712
-        exit_fee = sell_val * 0.003850
-        tax_val = sell_val * 0.005000
-        slip_cost = abs(rec["avg_entry"] - rec["planned_entry"]) * rec["qty"]
-        total_costs = entry_fee + exit_fee + tax_val
-
-        gross_pnl = sell_val - buy_val
-        net_pnl = gross_pnl - total_costs
-        net_ret = (net_pnl / buy_val) * 100.0
-
-        # R calculation
-        r_unit = max(1.0, rec["avg_entry"] - rec["initial_stop"])
-        realized_r = round((rec["avg_exit"] - rec["avg_entry"]) / r_unit, 2)
-
-        if net_pnl > 0:
-            outcome = "WIN"
-        elif net_pnl < -100_000:
-            outcome = "LOSS"
-        else:
-            outcome = "BREAKEVEN"
-
-        trade = ClosedTradeHistory(
-            portfolio_id=port.id,
-            symbol=rec["symbol"],
-            company_name=rec["company"],
-            sector=rec["sector"],
-            strategy_id=rec["strategy"],
-            strategy_name_fa=rec["strategy_fa"],
-            strategy_version=rec["strategy_ver"],
-            model_version="v2.4-isotonic-brier",
-            risk_policy_version="POL-TSE-2026-V2.5",
-            market_rules_version="TSE-RULES-2026-V1.0",
-            dataset_version="tse-pit-2026-08",
-            decision_method=rec["decision_method"],
-            opened_at=opened_dt,
-            closed_at=closed_dt,
-            holding_sessions=rec["holding_sessions"],
-            holding_duration_hours=round(holding_h, 1),
-            planned_entry=rec["planned_entry"],
-            avg_entry_price=rec["avg_entry"],
-            avg_exit_price=rec["avg_exit"],
-            total_quantity=rec["qty"],
-            gross_buy_value=buy_val,
-            gross_sell_value=sell_val,
-            entry_fees=entry_fee,
-            exit_fees=exit_fee,
-            tax=tax_val,
-            slippage_cost=slip_cost,
-            total_cost=total_costs,
-            gross_pnl=gross_pnl,
-            net_pnl=net_pnl,
-            net_return_pct=round(net_ret, 2),
-            initial_risk_amount=buy_val * 0.04,
-            initial_risk_pct_nav=0.35,
-            realized_R=realized_r,
-            MFE=rec["mfe"],
-            MAE=rec["mae"],
-            initial_stop=rec["initial_stop"],
-            final_stop=rec["final_stop"],
-            target1=rec["target1"],
-            target2=rec["target2"],
-            exit_reason=rec["exit_reason"],
-            exit_reason_detail=rec["exit_reason_fa"],
-            market_regime_at_entry=rec["regime_entry"],
-            market_regime_at_exit=rec["regime_exit"],
-            portfolio_nav_at_entry=100_000_000_000.0,
-            portfolio_nav_at_exit=100_000_000_000.0 + net_pnl,
-            position_weight_at_entry=round(buy_val / 100_000_000_000.0, 3),
-            outcome_status=outcome,
-            reason_fa=f"سیگنال {rec['strategy_fa']} در نماد {rec['symbol']} با تصمیم {rec['decision_method']}",
-            lesson_fa=f"معامله با بازده خالص {net_ret:+.2f}٪ ({realized_r:+.2f}R) بسته شد.",
-        )
-        db.add(trade)
-        db.flush()
-
-        # Seed Execution Timeline
-        t1 = TradeExecutionTimeline(
-            trade_id=trade.id,
-            event_type="SIGNAL_TRIGGER",
-            timestamp=opened_dt - timedelta(minutes=15),
-            price=rec["planned_entry"],
-            quantity=0,
-            portion_pct=0.0,
-            fees=0.0,
-            notes_fa=f"صدور سیگنال معتبر {rec['strategy_fa']}",
-        )
-        t2 = TradeExecutionTimeline(
-            trade_id=trade.id,
-            event_type="ENTRY_FILL",
-            timestamp=opened_dt,
-            price=rec["avg_entry"],
-            quantity=int(rec["qty"] * 0.50),
-            portion_pct=50.0,
-            fees=entry_fee * 0.50,
-            notes_fa="اجرای پله اول خرید (۵۰٪ حجم تخصیصی)",
-        )
-        t3 = TradeExecutionTimeline(
-            trade_id=trade.id,
-            event_type="SCALE_IN_FILL",
-            timestamp=opened_dt + timedelta(days=1),
-            price=rec["avg_entry"] * 1.005,
-            quantity=int(rec["qty"] * 0.50),
-            portion_pct=50.0,
-            fees=entry_fee * 0.50,
-            notes_fa="تکمیل پله دوم خرید پس از تثبیت قیمت",
-        )
-        t4 = TradeExecutionTimeline(
-            trade_id=trade.id,
-            event_type="STOP_ADJUST",
-            timestamp=opened_dt + timedelta(days=3),
-            price=rec["final_stop"],
-            quantity=0,
-            portion_pct=0.0,
-            fees=0.0,
-            notes_fa=f"انتقال استاپ به {rec['final_stop']:,.0f} ریال (حفاظت از سود)",
-        )
-        t5 = TradeExecutionTimeline(
-            trade_id=trade.id,
-            event_type="FINAL_EXIT_FILL",
-            timestamp=closed_dt,
-            price=rec["avg_exit"],
-            quantity=rec["qty"],
-            portion_pct=100.0,
-            fees=exit_fee + tax_val,
-            notes_fa=rec["exit_reason_fa"],
-        )
-        db.add_all([t1, t2, t3, t4, t5])
-        db.flush()
-
-        # Generate Post-Mortem & Structured Lessons
-        learning_engine.generate_post_mortem(db, trade)
-
-    db.commit()
 
 
 # ── Endpoints ───────────────────────────────────────────────────────────
@@ -314,9 +36,8 @@ def _seed_initial_closed_trades_if_empty(db: Session):
 @router.get("/summary", response_model=HistorySummaryResponse)
 def get_trade_history_summary(db: Session = Depends(get_sync_db)):
     """Returns top summary metrics for all closed trades."""
-    _seed_initial_closed_trades_if_empty(db)
-
-    trades = db.query(ClosedTradeHistory).all()
+    port = get_active_campaign_portfolio(db)
+    trades = db.query(ClosedTradeHistory).filter(ClosedTradeHistory.portfolio_id == port.id).all() if port else []
     if not trades:
         return HistorySummaryResponse(
             total_closed_trades=0, wins=0, losses=0, breakevens=0, win_rate_pct=0.0,
@@ -398,9 +119,10 @@ def get_closed_trades_paginated(
     db: Session = Depends(get_sync_db),
 ):
     """Server-side paginated and filtered historical closed trades."""
-    _seed_initial_closed_trades_if_empty(db)
-
-    query = db.query(ClosedTradeHistory)
+    port = get_active_campaign_portfolio(db)
+    query = db.query(ClosedTradeHistory).filter(
+        ClosedTradeHistory.portfolio_id == (port.id if port else "__missing_campaign__")
+    )
 
     if symbol:
         query = query.filter(ClosedTradeHistory.symbol == symbol)
@@ -540,7 +262,11 @@ def get_closed_trades_paginated(
 @router.get("/trade/{trade_id}", response_model=ClosedTradeDetailResponse)
 def get_closed_trade_detail(trade_id: str, db: Session = Depends(get_sync_db)):
     """Returns complete trade detail, execution timeline, post-mortem, and chart bars for replay."""
-    trade = db.query(ClosedTradeHistory).filter(ClosedTradeHistory.id == trade_id).first()
+    port = get_active_campaign_portfolio(db)
+    trade = db.query(ClosedTradeHistory).filter(
+        ClosedTradeHistory.id == trade_id,
+        ClosedTradeHistory.portfolio_id == (port.id if port else "__missing_campaign__"),
+    ).first()
     if not trade:
         raise HTTPException(status_code=404, detail="معامله مورد نظر در تاریخچه یافت نشد.")
 
@@ -693,7 +419,10 @@ def export_closed_trades_csv(
     db: Session = Depends(get_sync_db),
 ):
     """Exports closed trades to an RFC-4180 compliant CSV file matching applied filters."""
-    query = db.query(ClosedTradeHistory)
+    port = get_active_campaign_portfolio(db)
+    query = db.query(ClosedTradeHistory).filter(
+        ClosedTradeHistory.portfolio_id == (port.id if port else "__missing_campaign__")
+    )
     if symbol:
         query = query.filter(ClosedTradeHistory.symbol == symbol)
     if strategy_id:

@@ -27,59 +27,27 @@ import {
 
 interface OpportunitiesProps {
   opportunities: any[];
+  referenceSymbols?: any;
   onSelectOpportunity: (opp: any) => void;
   onSelectSymbol?: (symbol: string) => void;
 }
 
-const BAD_STOCKS_LIST = [
-  {
-    id: "khodro",
-    symbol: "خودرو",
-    name_fa: "ایران خودرو",
-    opportunity_score: 34,
-    grade: "F",
-    cur_price: 3290,
-    tags: ["⚠️ شمول ماده ۱۴۱", "📉 زیان انباشته سنگین", "🔻 سرکوب قیمت گذاری"],
-    technical_flaw: "شکست کف حمایتی ۳،۱۰۰ ریال، تشکیل الگوی سر و شانه سقف و شیب نزولی تند EMA",
-    fundamental_flaw: "زیان انباشته بیش از ۲ برابر سرمایه ثبتی و نبود افق سودآوری عملیاتی",
-    exit_advice: "فروش در اولین پولبک صعودی و تبدیل نقدینگی به صندوق‌های درآمد ثابت یا سهام سودساز",
-  },
-  {
-    id: "khasapa",
-    symbol: "خساپا",
-    name_fa: "سایپا",
-    opportunity_score: 38,
-    grade: "F",
-    cur_price: 2150,
-    tags: ["⚠️ خروج پول هوشمند", "🔻 ریسک بالا", "📉 عدم توجیه بنیادی"],
-    technical_flaw: "نفوذ به زیر میانگین ۲۰۰ روزه و افت قدرت خریداران حقیقی به ۰.۶۵",
-    fundamental_flaw: "بهای تمام شده بالاتر از نرخ فروش دستوری و حاشیه سود ناخالص منفی",
-    exit_advice: "کاهش پله‌ای حجم و فعال‌سازی حد ضرر قطعی روی ۲،۰۰۰ ریال",
-  },
-  {
-    id: "vabellate",
-    symbol: "وبملت",
-    name_fa: "بانک ملت",
-    opportunity_score: 48,
-    grade: "D",
-    cur_price: 2720,
-    tags: ["⚠️ اشباع خرید", "⏳ نیازمند استراحت زمانی"],
-    technical_flaw: "واگرایی منفی مشهود در اندیکاتور RSI و برخورد به مقاومت تاریخی",
-    fundamental_flaw: "رشد تراز عملیاتی مناسب اما قیمت فعلی پتانسیل رشد کوتاه‌مدت را پیش‌خور کرده است",
-    exit_advice: "سیو سود ۵۰٪ در قیمت جاری و جابجایی استاپ به ۲،۶۰۰ ریال",
-  },
-];
-
 export const OpportunitiesView: React.FC<OpportunitiesProps> = ({
   opportunities,
+  referenceSymbols,
   onSelectOpportunity,
   onSelectSymbol,
 }) => {
-  const [activeCategory, setActiveCategory] = useState<"hot" | "watchlist" | "rejected" | "all">("hot");
+  // The market feed is the primary content of this screen. Strategy results are
+  // separate derived views and can legitimately be empty while the feed is full.
+  const [activeCategory, setActiveCategory] = useState<"hot" | "watchlist" | "rejected" | "all">("all");
   const [searchTerm, setSearchTerm] = useState("");
   const [sectorFilter, setSectorFilter] = useState("ALL");
+  const [marketFilter, setMarketFilter] = useState<"ALL" | "TSE" | "IFB">("ALL");
   const [currentPage, setCurrentPage] = useState(1);
+  const [referencePage, setReferencePage] = useState(1);
   const ITEMS_PER_PAGE = 6;
+  const REFERENCE_ITEMS_PER_PAGE = 25;
 
   const handleSymbolClick = (opp: any) => {
     if (onSelectSymbol && opp.symbol) {
@@ -89,92 +57,53 @@ export const OpportunitiesView: React.FC<OpportunitiesProps> = ({
     }
   };
 
-  const dynamicOpportunities = opportunities && opportunities.length > 0 ? opportunities : [
-    {
-      symbol: "نوری",
-      name_fa: "پتروشیمی نوری",
-      opportunity_score: 94,
-      grade: "+A",
-      p_profit: 0.88,
-      entry_price: 42500,
-      target_price: 47800,
-      stop_price: 40300,
-      target_pct: 12.5,
-      stop_pct: 5.2,
-      tech_power: 96,
-      tape_power: 94,
-      fund_power: 95,
-      power_ratio: "۱.۷۵x (ورود سنگین)",
-      chart_pattern: "شکست مقاومت تاریخی و تثبیت بالای ابر ایچیموکو",
-      sales_growth: "+۵۴٪ رشد سود فصلی",
-      pe_ratio: "P/E برابر ۵.۴ (بسیار ارزنده)",
-      sector: "محصولات شیمیایی و پتروشیمی",
-      tags: [
-        { label: "👑 رکورد سودآوری فصلی", bg: "rgba(245, 158, 11, 0.15)", color: "#f59e0b" },
-        { label: "💵 ورود پول ۱.۷۵x", bg: "rgba(16, 185, 129, 0.15)", color: "#10b981" },
-        { label: "📈 سقف تاریخی", bg: "rgba(59, 130, 246, 0.15)", color: "#60a5fa" },
-      ],
-      ai_thesis: "همگرایی کم‌نظیر رشد ۵۴٪ نرخ فروش محصولات آروماتیک با جریان نقدینگی قدرتمند حقیقی.",
-    },
-    {
-      symbol: "فولاد",
-      name_fa: "فولاد مبارکه اصفهان",
-      opportunity_score: 91,
-      grade: "+A",
-      p_profit: 0.84,
-      entry_price: 5850,
-      target_price: 6520,
-      stop_price: 5550,
-      target_pct: 11.4,
-      stop_pct: 5.1,
-      tech_power: 92,
-      tape_power: 90,
-      fund_power: 94,
-      power_ratio: "۱.۶۰x (خریدار قوی)",
-      chart_pattern: "کف‌سازی دوقلو و عبور از خط گردن با حجم مشکوک",
-      sales_growth: "+۳۸٪ رشد فروش بورس کالا",
-      pe_ratio: "P/E تحلیلی ۵.۱",
-      sector: "فلزات اساسی",
-      tags: [
-        { label: "🔥 رقابت داغ بورس کالا", bg: "rgba(245, 158, 11, 0.15)", color: "#f59e0b" },
-        { label: "💎 تراز مالی مستحکم", bg: "rgba(16, 185, 129, 0.15)", color: "#10b981" },
-      ],
-      ai_thesis: "تقاضای انباشته شمش و اسلب در رینگ صنعتی و نسبت شانس سود ۸۴٪ در رادار هوش مصنوعی.",
-    },
-    {
-      symbol: "فملی",
-      name_fa: "ملی صنایع مس ایران",
-      opportunity_score: 89,
-      grade: "A",
-      p_profit: 0.81,
-      entry_price: 7420,
-      target_price: 8250,
-      stop_price: 7040,
-      target_pct: 11.2,
-      stop_pct: 5.1,
-      tech_power: 88,
-      tape_power: 86,
-      fund_power: 93,
-      power_ratio: "۱.۴۵x (انباشت آرام)",
-      chart_pattern: "پولبک به میانگین ۵۰ روزه و الگوی کندلی چکش معکوس",
-      sales_growth: "+۴۲٪ رشد دلاری درآمد",
-      pe_ratio: "P/E برابر ۵.۸",
-      sector: "فلزات اساسی",
-      tags: [
-        { label: "🌐 رشد مس جهانی LME", bg: "rgba(59, 130, 246, 0.15)", color: "#60a5fa" },
-        { label: "📊 F-Score عالی ۸", bg: "rgba(16, 185, 129, 0.15)", color: "#10b981" },
-      ],
-      ai_thesis: "حاشیه سود ناخالص بالای ۵۰٪ کاتد مس و واگرایی مثبت شاخص MFE در کف کانال.",
-    },
-  ];
+  const dynamicOpportunities = Array.isArray(opportunities) ? opportunities : [];
+  const referenceRows = Array.isArray(referenceSymbols?.rows) ? referenceSymbols.rows : [];
+  const referenceMeta = referenceSymbols?.meta || {};
+  const referenceProvider = String(referenceSymbols?.provider || "TSETMC Public CDN");
+  const referenceTradeEligible = Boolean(referenceSymbols?.trade_eligible);
+  const referenceIsStale = Boolean(referenceMeta.stale);
+  const referenceStatus = String(referenceMeta.status || "UNAVAILABLE");
+  const referenceDisplayState = String(referenceMeta.display_state || "NO_DATA");
+  const referenceIsLastClose = referenceDisplayState === "LAST_CLOSE";
+  const referenceLastUpdate = referenceMeta.last_success_at
+    ? new Date(referenceMeta.last_success_at).toLocaleString("fa-IR", {
+        timeZone: "Asia/Tehran",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : "ثبت نشده";
+  const marketClass = (value: unknown): "TSE" | "IFB" | "UNKNOWN" => {
+    const normalized = String(value || "").toUpperCase();
+    if (normalized === "IFB" || normalized.includes("فرابورس")) return "IFB";
+    if (normalized === "TSE" || normalized.includes("بورس")) return "TSE";
+    return "UNKNOWN";
+  };
+  const filteredReferenceRows = referenceRows.filter((row: any) => {
+    const matchesText = !searchTerm
+      || String(row.ticker || "").includes(searchTerm)
+      || String(row.name_fa || "").includes(searchTerm);
+    const matchesMarket = marketFilter === "ALL" || marketClass(row.market) === marketFilter;
+    return matchesText && matchesMarket;
+  });
+  const referenceTotalPages = Math.max(1, Math.ceil(filteredReferenceRows.length / REFERENCE_ITEMS_PER_PAGE));
+  const safeReferencePage = Math.min(referencePage, referenceTotalPages);
+  const visibleReferenceRows = filteredReferenceRows.slice(
+    (safeReferencePage - 1) * REFERENCE_ITEMS_PER_PAGE,
+    safeReferencePage * REFERENCE_ITEMS_PER_PAGE,
+  );
 
-  const hotList = dynamicOpportunities.filter((x) => (x.opportunity_score || 80) >= 60);
-  const watchlistList = dynamicOpportunities.filter((x) => (x.opportunity_score || 80) < 60);
+  const hotList = dynamicOpportunities.filter((x) => x.actionable === true);
+  const watchlistList = dynamicOpportunities.filter((x) => x.actionable !== true);
+  const rejectedList = dynamicOpportunities.filter((x) => x.actionable !== true && Array.isArray(x.risk_flags_fa) && x.risk_flags_fa.length > 0);
 
   let displayedList = dynamicOpportunities;
   if (activeCategory === "hot") displayedList = hotList;
   else if (activeCategory === "watchlist") displayedList = watchlistList;
-  else if (activeCategory === "rejected") displayedList = BAD_STOCKS_LIST;
+  else if (activeCategory === "rejected") displayedList = rejectedList;
 
   const filteredList = displayedList.filter((item: any) => {
     const matchesSearch =
@@ -185,7 +114,8 @@ export const OpportunitiesView: React.FC<OpportunitiesProps> = ({
       sectorFilter === "ALL" ||
       item.sector === sectorFilter ||
       (activeCategory === "rejected");
-    return matchesSearch && matchesSector;
+    const matchesMarket = marketFilter === "ALL" || marketClass(item.market) === marketFilter;
+    return matchesSearch && matchesSector && matchesMarket;
   });
 
   const totalPages = Math.ceil(filteredList.length / ITEMS_PER_PAGE);
@@ -195,6 +125,7 @@ export const OpportunitiesView: React.FC<OpportunitiesProps> = ({
   const handleCategoryChange = (cat: "hot" | "watchlist" | "rejected" | "all") => {
     setActiveCategory(cat);
     setCurrentPage(1);
+    setReferencePage(1);
   };
 
   return (
@@ -279,11 +210,12 @@ export const OpportunitiesView: React.FC<OpportunitiesProps> = ({
             }}
           >
             <ShieldAlert size={16} />
-            <span>سهام پرریسک و اخطار خروج ({toPersianDigits(BAD_STOCKS_LIST.length)})</span>
+            <span>سیگنال‌های ردشده با دلیل ثبت‌شده ({toPersianDigits(rejectedList.length)})</span>
           </button>
 
           <button
             onClick={() => handleCategoryChange("all")}
+            data-testid="reference-market-tab"
             style={{
               padding: "0.55rem 1.1rem",
               borderRadius: "8px",
@@ -300,7 +232,7 @@ export const OpportunitiesView: React.FC<OpportunitiesProps> = ({
             }}
           >
             <BarChart3 size={16} />
-            <span>کل نمادهای بازار ({toPersianDigits(62)})</span>
+            <span>{referenceTradeEligible ? "کل بازار دریافت‌شده" : "نمادهای مرجع دریافت‌شده"} ({toPersianDigits(referenceMeta.collected || 0)})</span>
           </button>
         </div>
       </div>
@@ -321,17 +253,89 @@ export const OpportunitiesView: React.FC<OpportunitiesProps> = ({
         <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", color: "var(--text-secondary)" }}>
           <ShieldAlert size={16} color="var(--tse-gold)" />
           <span style={{ fontWeight: 700, color: "#ffffff" }}>دلایل رد و فیلتر نمادها (Rejection Gates):</span>
-          <span>از ۶۲ نماد نقدشونده بورس:</span>
+          <span>
+            سیگنال‌های همین اجرای رسمی؛ دیده‌بان {referenceProvider} از نتیجهٔ استراتژی و گیت بنیادی جداست.
+          </span>
         </div>
         <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap", color: "var(--text-secondary)" }}>
-          <span>• نسبت R/R زیر ۱.۸: <strong style={{ color: "var(--tse-red)" }}>۱۸ نماد</strong></span>
-          <span>• نقدشوندگی / صف فروش: <strong style={{ color: "var(--tse-red)" }}>۱۴ نماد</strong></span>
-          <span>• عبور قیمت از ورود: <strong style={{ color: "var(--tse-gold)" }}>۹ نماد</strong></span>
-          <span>• سقف تمرکز صنعت ۱۸٪: <strong style={{ color: "var(--tse-blue)" }}>۶ نماد</strong></span>
-          <span>• زیان انباشته کدال: <strong style={{ color: "var(--tse-red)" }}>۸ نماد</strong></span>
-          <span>• واگرایی پول حقیقی: <strong style={{ color: "var(--tse-gold)" }}>۷ نماد</strong></span>
+          <span>خرید مجاز: <strong style={{ color: "var(--tse-green)" }}>{toPersianDigits(hotList.length)} نماد</strong></span>
+          <span>تحت نظر: <strong style={{ color: "var(--tse-blue)" }}>{toPersianDigits(watchlistList.length)} نماد</strong></span>
+          <span>ردشده با دلیل: <strong style={{ color: "var(--tse-red)" }}>{toPersianDigits(rejectedList.length)} نماد</strong></span>
+          <span>مرجع جمع‌آوری‌شده: <strong style={{ color: "var(--tse-gold)" }}>{toPersianDigits(referenceMeta.collected || 0)} از {toPersianDigits(referenceMeta.provider_total || 0)}</strong></span>
         </div>
       </div>
+
+      {activeCategory === "all" && (
+        <div data-testid="reference-market-panel" className="card" style={{ padding: "1rem 1.25rem", borderColor: "rgba(245,158,11,0.35)" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap", marginBottom: "0.8rem" }}>
+            <div>
+              <div style={{ color: "var(--tse-gold)", fontWeight: 800 }}>دیده‌بان {referenceProvider} — {referenceTradeEligible ? "داده رسمی بازار" : "منبع رسمی؛ فعلاً غیرقابل استفاده"}</div>
+              <div style={{ color: "var(--text-secondary)", fontSize: "0.78rem", marginTop: "0.2rem" }}>
+                این ردیف‌ها خودِ سیگنال خرید نیستند؛ خرید فقط پس از همگرایی استراتژی‌ها، تاریخچه کافی و گیت بنیادی انجام می‌شود.
+              </div>
+            </div>
+            <div style={{ color: "var(--text-secondary)", fontSize: "0.78rem" }}>
+              نمایش صفحه {toPersianDigits(safeReferencePage)} از {toPersianDigits(referenceTotalPages)} • {toPersianDigits(filteredReferenceRows.length)} نماد قابل مرور • کل provider: {toPersianDigits(referenceMeta.provider_total || 0)}
+              {referenceMeta.completed ? " • تکمیل شده" : " • در حال تکمیل مرحله‌ای"}
+              <span style={{ color: referenceIsLastClose ? "var(--tse-gold)" : referenceIsStale || referenceStatus !== "HEALTHY" ? "var(--tse-red)" : "var(--tse-green)", fontWeight: 800 }}>
+                {referenceIsLastClose
+                  ? ` • بازار بسته • آخرین ثبت: ${referenceLastUpdate}`
+                  : ` • سلامت: ${referenceStatus} • ${referenceIsStale ? "کهنه/نامعتبر برای تصمیم" : `تازه (${toPersianDigits(referenceMeta.age_seconds ?? 0)} ثانیه)`}`}
+              </span>
+            </div>
+          </div>
+          {referenceIsLastClose ? (
+            <div data-testid="last-close-market-banner" style={{ marginBottom: "0.8rem", padding: "0.65rem 0.8rem", borderRadius: "7px", background: "var(--tse-amber-subtle)", color: "var(--tse-gold)", fontSize: "0.8rem", fontWeight: 700 }}>
+              بازار بسته است؛ این قیمت‌ها آخرین snapshot ثبت‌شده‌اند و فقط نمایش داده می‌شوند. هیچ درخواست جدیدی تا بازگشایی بعدی ({new Date(referenceMeta.next_open_at_tehran).toLocaleString("fa-IR", { timeZone: "Asia/Tehran", weekday: "long", hour: "2-digit", minute: "2-digit" })}) ارسال نمی‌شود.
+            </div>
+          ) : (referenceIsStale || referenceStatus !== "HEALTHY") && (
+            <div style={{ marginBottom: "0.8rem", padding: "0.65rem 0.8rem", borderRadius: "7px", background: "var(--tse-red-subtle)", color: "var(--tse-red)", fontSize: "0.8rem", fontWeight: 700 }}>
+              آخرین batch رسمی سالم و تازه نیست؛ ردیف قبلی برای تحلیل یا معامله قابل استفاده نیست.
+            </div>
+          )}
+          {filteredReferenceRows.length === 0 ? (
+            <div style={{ color: "var(--text-muted)", fontSize: "0.82rem", padding: "0.75rem 0" }}>
+              JSON API رسمی TSETMC هنوز هیچ batch معتبر بازار برنگردانده است؛ تا رفع دسترسی شبکه، قیمت یا سیگنال ساخته نمی‌شود.
+            </div>
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.8rem" }}>
+                <thead><tr style={{ color: "var(--text-muted)", borderBottom: "1px solid var(--border-subtle)" }}>
+                  <th style={{ textAlign: "right", padding: "0.6rem" }}>نماد</th>
+                  <th style={{ textAlign: "right", padding: "0.6rem" }}>نام</th>
+                  <th style={{ textAlign: "left", padding: "0.6rem" }}>آخرین قیمت (ریال)</th>
+                  <th style={{ textAlign: "left", padding: "0.6rem" }}>تغییر</th>
+                  <th style={{ textAlign: "right", padding: "0.6rem" }}>وضعیت</th>
+                </tr></thead>
+                <tbody>{visibleReferenceRows.map((row: any) => (
+                  <tr key={row.slug} data-testid="reference-market-row" style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
+                    <td style={{ padding: "0.6rem", color: "#fff", fontWeight: 800 }}>{row.ticker}</td>
+                    <td style={{ padding: "0.6rem", color: "var(--text-secondary)" }}>{row.name_fa}</td>
+                    <td style={{ padding: "0.6rem", textAlign: "left" }} className="tabular-num">{formatNumberFa(row.last_price_rials)}</td>
+                    <td style={{ padding: "0.6rem", textAlign: "left", color: Number(row.change_pct) >= 0 ? "var(--tse-green)" : "var(--tse-red)" }}>{formatPercentFa(row.change_pct)}</td>
+                    <td style={{ padding: "0.6rem", color: referenceTradeEligible ? "var(--tse-green)" : "var(--tse-gold)" }}>{referenceTradeEligible ? "رسمی؛ منتظر گیت تحلیل" : referenceIsLastClose ? "قیمت پایانی؛ فقط نمایش" : "مرجع؛ غیرقابل اجرا"}</td>
+                  </tr>
+                ))}</tbody>
+              </table>
+            </div>
+          )}
+          {filteredReferenceRows.length > REFERENCE_ITEMS_PER_PAGE && (
+            <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: "0.75rem", marginTop: "0.9rem" }}>
+              <button
+                onClick={() => setReferencePage((value) => Math.max(1, value - 1))}
+                disabled={safeReferencePage === 1}
+                style={{ padding: "0.4rem 0.8rem", borderRadius: "6px", border: "1px solid var(--border-subtle)", background: "var(--bg-surface)", color: "var(--text-primary)", opacity: safeReferencePage === 1 ? 0.45 : 1, cursor: safeReferencePage === 1 ? "not-allowed" : "pointer" }}
+              >صفحه قبل</button>
+              <span style={{ color: "var(--text-secondary)", fontSize: "0.8rem" }}>{toPersianDigits(safeReferencePage)} / {toPersianDigits(referenceTotalPages)}</span>
+              <button
+                onClick={() => setReferencePage((value) => Math.min(referenceTotalPages, value + 1))}
+                disabled={safeReferencePage === referenceTotalPages}
+                style={{ padding: "0.4rem 0.8rem", borderRadius: "6px", border: "1px solid var(--border-subtle)", background: "var(--bg-surface)", color: "var(--text-primary)", opacity: safeReferencePage === referenceTotalPages ? 0.45 : 1, cursor: safeReferencePage === referenceTotalPages ? "not-allowed" : "pointer" }}
+              >صفحه بعد</button>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ── 2. Search & Sector Filter Bar ──────────────────────────────── */}
       <div
@@ -351,7 +355,7 @@ export const OpportunitiesView: React.FC<OpportunitiesProps> = ({
             type="text"
             placeholder="جستجوی نماد یا نام شرکت..."
             value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
+            onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); setReferencePage(1); }}
             style={{
               background: "none",
               border: "none",
@@ -362,6 +366,28 @@ export const OpportunitiesView: React.FC<OpportunitiesProps> = ({
               width: "100%",
             }}
           />
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
+          <span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>بازار:</span>
+          <select
+            value={marketFilter}
+            onChange={(e) => { setMarketFilter(e.target.value as "ALL" | "TSE" | "IFB"); setCurrentPage(1); setReferencePage(1); }}
+            aria-label="فیلتر طبقه‌بندی بازار"
+            style={{
+              backgroundColor: "rgba(10, 15, 29, 0.8)",
+              color: "#ffffff",
+              border: "1px solid rgba(255, 255, 255, 0.1)",
+              borderRadius: "6px",
+              padding: "0.45rem 0.85rem",
+              fontFamily: "inherit",
+              fontSize: "0.82rem",
+            }}
+          >
+            <option value="ALL">همه بازارها</option>
+            <option value="TSE">بورس تهران</option>
+            <option value="IFB">فرابورس ایران</option>
+          </select>
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
@@ -391,7 +417,7 @@ export const OpportunitiesView: React.FC<OpportunitiesProps> = ({
         </div>
 
         <div style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>
-          <span>{toPersianDigits(filteredList.length)} نماد یافت شد</span>
+          <span data-testid="visible-market-count">{toPersianDigits(activeCategory === "all" ? filteredReferenceRows.length : filteredList.length)} نماد یافت شد</span>
           {totalPages > 1 && <span> • صفحه {toPersianDigits(safePage)} از {toPersianDigits(totalPages)}</span>}
         </div>
       </div>
@@ -462,13 +488,15 @@ export const OpportunitiesView: React.FC<OpportunitiesProps> = ({
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))", gap: "1.25rem" }}>
           {currentList.map((item: any) => {
-            const score = item.opportunity_score || 80;
+            const score = item.opportunity_score ?? 0;
             const isTopGrade = score >= 85;
             const scoreColor = isTopGrade ? "var(--tse-green)" : "var(--tse-blue)";
             
             const tech_power = item.confidence || item.tech_power || 0;
             const tape_power = item.signal_strength || item.tape_power || 0;
-            const fund_power = item.data_quality || item.fund_power || 0;
+            const fundamentalGate = item.decision_components?.fundamental_gate;
+            const calibrationGate = item.decision_components?.calibration_gate;
+            const fund_power = Number(fundamentalGate?.score || 0);
             const p_profit = item.p_profit !== undefined ? item.p_profit * 100 : 0;
             
             const entry_price = item.entry_zone?.low || item.entry_price || 0;
@@ -477,11 +505,13 @@ export const OpportunitiesView: React.FC<OpportunitiesProps> = ({
             const target_pct = item.expected_return_pct || item.target_pct || 0;
             const stop_pct = item.expected_drawdown_pct || item.stop_pct || 0;
             
-            const power_ratio = item.fill_probability_score ? formatPercentFa(item.fill_probability_score, 0) + "+" : (item.power_ratio || "عادی");
-            const chart_pattern = item.invalidation?.type || item.chart_pattern || "رونددار";
-            
-            const sales_growth = item.sector || item.sales_growth || "مثبت";
-            const pe_ratio = item.grade ? `رتبه ${item.grade}` : (item.pe_ratio || "ارزنده");
+            const executionQuality = item.fill_probability_score !== undefined
+              ? formatPercentFa(item.fill_probability_score, 0)
+              : "محاسبه نشده";
+            const invalidationRule = item.invalidation?.type || "ثبت نشده";
+            const fundamentalStatus = fundamentalGate?.passed ? "تأییدشده" : "تأیید نشده";
+            const fundamentalReason = fundamentalGate?.reasons_fa?.[0]
+              || "صورت مالی نقطه‌زمانی و دو منبع مستقل برای این نماد کامل نیست.";
             const ai_thesis = (item.top_reasons_fa && item.top_reasons_fa[0]) || item.ai_thesis || "تاییدیه چندگانه هوش مصنوعی";
 
             return (
@@ -558,16 +588,18 @@ export const OpportunitiesView: React.FC<OpportunitiesProps> = ({
                     <strong style={{ color: "var(--tse-blue)" }}>{formatPercentFa(tech_power, 0)}</strong>
                   </div>
                   <div style={{ borderRight: "1px solid rgba(255,255,255,0.06)" }}>
-                    <span style={{ color: "var(--text-secondary)", display: "block", fontSize: "0.68rem" }}>تابلو</span>
+                    <span style={{ color: "var(--text-secondary)", display: "block", fontSize: "0.68rem" }}>همگرایی</span>
                     <strong style={{ color: "var(--tse-green)" }}>{formatPercentFa(tape_power, 0)}</strong>
                   </div>
                   <div style={{ borderRight: "1px solid rgba(255,255,255,0.06)" }}>
-                    <span style={{ color: "var(--text-secondary)", display: "block", fontSize: "0.68rem" }}>کدال</span>
+                    <span style={{ color: "var(--text-secondary)", display: "block", fontSize: "0.68rem" }}>بنیادی</span>
                     <strong style={{ color: "var(--tse-gold)" }}>{formatPercentFa(fund_power, 0)}</strong>
                   </div>
                   <div style={{ borderRight: "1px solid rgba(255,255,255,0.06)" }}>
                     <span style={{ color: "var(--text-secondary)", display: "block", fontSize: "0.68rem" }}>شانس سود</span>
-                    <strong style={{ color: "#f59e0b" }}>{formatPercentFa(Math.round(p_profit), 0)}</strong>
+                    <strong style={{ color: "#f59e0b" }}>
+                      {calibrationGate?.passed ? formatPercentFa(Math.round(p_profit), 0) : "کالیبره‌نشده"}
+                    </strong>
                   </div>
                 </div>
 
@@ -591,26 +623,34 @@ export const OpportunitiesView: React.FC<OpportunitiesProps> = ({
                     </div>
                   </div>
 
-                  <div style={{ borderRight: "1px solid rgba(255,255,255,0.06)", borderLeft: "1px solid rgba(255,255,255,0.06)" }}>
-                    <span style={{ fontSize: "0.65rem", color: "var(--text-secondary)" }}>نقطه ورود:</span>
-                    <div style={{ fontWeight: 800, color: "var(--tse-blue)", fontSize: "0.85rem", marginTop: "2px" }}>
-                      {formatRial(entry_price)}
+                  {item.actionable === true ? (
+                    <>
+                      <div style={{ borderRight: "1px solid rgba(255,255,255,0.06)", borderLeft: "1px solid rgba(255,255,255,0.06)" }}>
+                        <span style={{ fontSize: "0.65rem", color: "var(--text-secondary)" }}>نقطه ورود:</span>
+                        <div style={{ fontWeight: 800, color: "var(--tse-blue)", fontSize: "0.85rem", marginTop: "2px" }}>
+                          {formatRial(entry_price)}
+                        </div>
+                      </div>
+                      <div style={{ borderLeft: "1px solid rgba(255,255,255,0.06)" }}>
+                        <span style={{ fontSize: "0.65rem", color: "var(--tse-green)" }}>تارگت ({formatPercentFa(target_pct, 1)}):</span>
+                        <div style={{ fontWeight: 800, color: "var(--tse-green)", fontSize: "0.85rem", marginTop: "2px" }}>
+                          {formatRial(target_price)}
+                        </div>
+                      </div>
+                      <div>
+                        <span style={{ fontSize: "0.65rem", color: "var(--tse-red)" }}>حد ضرر ({formatPercentFa(stop_pct, 1)}):</span>
+                        <div style={{ fontWeight: 800, color: "var(--tse-red)", fontSize: "0.85rem", marginTop: "2px" }}>
+                          {formatRial(stop_price)}
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                    <div style={{ gridColumn: "span 3", borderRight: "1px solid rgba(255,255,255,0.06)", display: "flex", alignItems: "center", justifyContent: "center", padding: "0 0.5rem" }}>
+                      <span style={{ fontSize: "0.7rem", color: "var(--tse-gold)", fontWeight: 700 }}>
+                        تحلیل پژوهشی؛ بدون مجوز ورود و بدون سطوح اجرایی
+                      </span>
                     </div>
-                  </div>
-
-                  <div style={{ borderLeft: "1px solid rgba(255,255,255,0.06)" }}>
-                    <span style={{ fontSize: "0.65rem", color: "var(--tse-green)" }}>تارگت ({formatPercentFa(target_pct, 1)}):</span>
-                    <div style={{ fontWeight: 800, color: "var(--tse-green)", fontSize: "0.85rem", marginTop: "2px" }}>
-                      {formatRial(target_price)}
-                    </div>
-                  </div>
-
-                  <div>
-                    <span style={{ fontSize: "0.65rem", color: "var(--tse-red)" }}>حد ضرر ({formatPercentFa(stop_pct, 1)}):</span>
-                    <div style={{ fontWeight: 800, color: "var(--tse-red)", fontSize: "0.85rem", marginTop: "2px" }}>
-                      {formatRial(stop_price)}
-                    </div>
-                  </div>
+                  )}
                 </div>
 
                 {/* 4. Dual Technical & Fundamental KPIs */}
@@ -620,8 +660,8 @@ export const OpportunitiesView: React.FC<OpportunitiesProps> = ({
                       <TrendingUp size={14} /> <span>تکنیکال و تابلو:</span>
                     </div>
                     <div style={{ color: "var(--text-secondary)", lineHeight: 1.45 }}>
-                      <div>• پول هوشمند: <strong style={{ color: "var(--tse-green)" }}>{power_ratio}</strong></div>
-                      <div>• الگو: <span style={{ color: "#ffffff" }}>{chart_pattern}</span></div>
+                      <div>• کیفیت اجرای فرضی: <strong style={{ color: "var(--tse-green)" }}>{executionQuality}</strong></div>
+                      <div>• قاعده ابطال: <span style={{ color: "#ffffff" }}>{invalidationRule}</span></div>
                     </div>
                   </div>
 
@@ -630,8 +670,8 @@ export const OpportunitiesView: React.FC<OpportunitiesProps> = ({
                       <FileText size={14} /> <span>بنیادی و کدال:</span>
                     </div>
                     <div style={{ color: "var(--text-secondary)", lineHeight: 1.45 }}>
-                      <div>• رشد سود: <strong style={{ color: "var(--tse-green)" }}>{sales_growth}</strong></div>
-                      <div>• ارزش‌گذاری: <span style={{ color: "#ffffff" }}>{pe_ratio}</span></div>
+                      <div>• گیت بنیادی: <strong style={{ color: fundamentalGate?.passed ? "var(--tse-green)" : "var(--tse-red)" }}>{fundamentalStatus}</strong></div>
+                      <div title={fundamentalReason}>• شواهد: <span style={{ color: "#ffffff" }}>{fundamentalGate?.passed ? "کافی" : "ناکافی"}</span></div>
                     </div>
                   </div>
                 </div>

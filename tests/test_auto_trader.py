@@ -7,12 +7,14 @@ from packages.domain.models import Portfolio, Position, PaperTradeLog, Indicator
 from packages.shared.database import init_db_sync, SyncSessionLocal
 from services.paper_broker.auto_trader import auto_trader
 from services.paper_broker.attribution import update_indicator_attribution, INDICATOR_DEFINITIONS
+from apps.api.routes.auth import create_access_token
 
 
 @pytest.fixture(scope="module")
 def client():
     init_db_sync()
     with TestClient(app) as c:
+        c.cookies.set("radar_session", create_access_token({"sub": "test-admin", "role": "admin"}))
         yield c
 
 

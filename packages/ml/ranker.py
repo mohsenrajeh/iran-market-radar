@@ -44,12 +44,7 @@ class MLRankerModel:
         Returns (raw_edge_score, calibrated_p_profit).
         """
         if not self.is_trained:
-            # Fallback heuristic
-            rs = feature_dict.get("ret_20d", 0.0)
-            bp = feature_dict.get("real_buyer_power_ratio", 1.0)
-            raw_edge = float(np.clip(0.5 + rs + (bp - 1.0) * 0.1, 0.1, 0.9))
-            p_profit = self.calibrator.predict_p_profit(raw_edge)
-            return raw_edge, p_profit
+            raise RuntimeError("ML ranker is unavailable until walk-forward training and OOS calibration complete.")
 
         x_vec = np.array([[feature_dict.get(k, 0.0) for k in self.feature_names]], dtype=float)
         raw_p = float(self.model.predict_proba(x_vec)[0, 1])

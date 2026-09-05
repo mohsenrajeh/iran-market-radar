@@ -12,6 +12,17 @@ import { UnifiedSymbolModal } from "../components/UnifiedSymbolModal";
 import { LoginModal } from "../components/LoginModal";
 import { AlertCircle, RefreshCw, X } from "lucide-react";
 
+async function responseErrorMessage(response: Response, fallback: string): Promise<string> {
+  try {
+    const payload = await response.json();
+    if (typeof payload?.detail === "string") return payload.detail;
+    if (typeof payload?.detail?.message === "string") return payload.detail.message;
+  } catch {
+    // A non-JSON upstream error is reduced to a safe user-facing message.
+  }
+  return fallback;
+}
+
 export default function DashboardPage() {
   const [activeTab, setActiveTab] = useState<NavTab>("overview");
   // Lazy-mount: tracks which tabs have been rendered at least once so they persist (display:none)
@@ -33,6 +44,16 @@ export default function DashboardPage() {
     setVisitedTabs((prev) => new Set([...Array.from(prev), targetTab]));
   }, []);
 
+  useEffect(() => {
+    const requireOwnerLogin = () => {
+      setIsAuthenticated(false);
+      setCurrentUser("");
+      setRefreshError("نشست شما منقضی شده است. برای ادامه، دوباره به‌عنوان مالک سامانه وارد شوید.");
+    };
+    window.addEventListener("radar:auth-required", requireOwnerLogin);
+    return () => window.removeEventListener("radar:auth-required", requireOwnerLogin);
+  }, []);
+
   // Ensure activeTab is always marked as visited so it renders immediately
   useEffect(() => {
     setVisitedTabs((prev) => {
@@ -52,27 +73,29 @@ export default function DashboardPage() {
     }
   };
 
-  // Authentication State (Persistent 30 days)
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(true);
-  const [currentUser, setCurrentUser] = useState<string>("admin");
+  // Authentication state is derived only from the server-side HttpOnly session.
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [authChecked, setAuthChecked] = useState<boolean>(false);
+  const [currentUser, setCurrentUser] = useState<string>("");
 
   useEffect(() => {
-    // Check saved session
-    const token = typeof window !== "undefined" ? localStorage.getItem("radar_auth_token") : null;
-    if (!token) {
-      // Default to authenticated for seamless local paper-trading access
-      setIsAuthenticated(true);
-      setCurrentUser("admin");
-    } else {
-      setIsAuthenticated(true);
-      const savedUser = localStorage.getItem("radar_auth_user") || "admin";
-      setCurrentUser(savedUser);
-    }
+    fetch("/api/v1/auth/me", { credentials: "same-origin", cache: "no-store" })
+      .then((res) => res.json())
+      .then((profile) => {
+        setIsAuthenticated(Boolean(profile.authenticated));
+        setCurrentUser(profile.username || "");
+      })
+      .catch(() => {
+        setIsAuthenticated(false);
+        setCurrentUser("");
+      })
+      .finally(() => setAuthChecked(true));
   }, []);
 
   // Global State Data
   const [overview, setOverview] = useState<any | null>(null);
   const [opportunities, setOpportunities] = useState<any[]>([]);
+  const [referenceSymbols, setReferenceSymbols] = useState<any>({ rows: [], meta: {}, trade_eligible: false });
   const [sectors, setSectors] = useState<any[]>([]);
   const [portfolio, setPortfolio] = useState<any | null>(null);
   const [openPositionsCount, setOpenPositionsCount] = useState<number>(0);
@@ -83,10 +106,16 @@ export default function DashboardPage() {
   const [lastUpdatedTime, setLastUpdatedTime] = useState<string>("");
   const [refreshToast, setRefreshToast] = useState<string | null>(null);
   const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [lastRefreshResult, setLastRefreshResult] = useState<{
+    message: string;
+    timestamp: string;
+    tradeEligible: boolean;
+  } | null>(null);
 
   // Auto-Refresh & Market Session State
   const [isAutoRefreshEnabled, setIsAutoRefreshEnabled] = useState<boolean>(true);
-  const [cadenceSeconds, setCadenceSeconds] = useState<number>(10);
+  const [cadenceSeconds, setCadenceSeconds] = useState<number>(60);
+  const [marketSession, setMarketSession] = useState<any | null>(null);
 
   useEffect(() => {
     const savedAuto = typeof window !== "undefined" ? localStorage.getItem("radar_auto_refresh") : null;
@@ -113,75 +142,104 @@ export default function DashboardPage() {
     try {
       if (manual) {
         // Advance market session, compute features, re-score, and execute auto-trader
-        const syncRes = await fetch("/api/v1/market/sync-all", { method: "POST" });
-        if (!syncRes.ok) {
-          const errText = await syncRes.text();
-          throw new Error(`خطای سرور (${syncRes.status}): ${errText || "عدم دریافت پاسخ معتبر از هسته پردازش بورس"}`);
+        const syncRes = await fetch("/api/v1/market/sync-all", { method: "POST", credentials: "same-origin" });
+        if (syncRes.status === 401) {
+          window.dispatchEvent(new Event("radar:auth-required"));
+          throw new Error("نشست شما منقضی شده است؛ لطفاً دوباره وارد شوید.");
         }
-        setRefreshToast("✅ بازار یک گام به جلو حرکت کرد: قیمت‌ها بروزرسانی شدند و سود/زیان محاسبه گردید.");
+        if (!syncRes.ok) {
+          throw new Error(await responseErrorMessage(syncRes, `همگام‌سازی رسمی با خطای ${syncRes.status} متوقف شد.`));
+        }
+        const syncPayload = await syncRes.json();
+        const resultMessage = syncPayload?.message || "همگام‌سازی انجام شد؛ هیچ معامله‌ای در این مرحله اجرا نشد.";
+        setRefreshToast(resultMessage);
+        setLastRefreshResult({
+          message: resultMessage,
+          timestamp: syncPayload?.timestamp_jalali || "زمان ثبت نشده",
+          tradeEligible: Boolean(syncPayload?.sync_stats?.trade_eligible),
+        });
         setTimeout(() => setRefreshToast(null), 4500);
       }
 
-      const [resOverview, resOpps, resSectors, resPort] = await Promise.all([
-        fetch("/api/v1/market/overview"),
-        fetch("/api/v1/opportunities?actionable_only=false"),
-        fetch("/api/v1/market/sectors"),
-        fetch("/api/v1/paper/portfolio"),
+      const [resOverview, resOpps, resSectors, resReferenceSymbols] = await Promise.all([
+        fetch("/api/v1/market/overview", { credentials: "same-origin", cache: "no-store" }),
+        fetch("/api/v1/opportunities?actionable_only=false&min_score=0", { credentials: "same-origin", cache: "no-store" }),
+        fetch("/api/v1/market/sectors", { credentials: "same-origin", cache: "no-store" }),
+        fetch("/api/v1/market/reference-symbols?per_page=2000", { credentials: "same-origin", cache: "no-store" }),
       ]);
 
-      if (!resOverview.ok && manual) {
-        throw new Error("خطا در دریافت وضعیت شاخص‌های کل بازار.");
+      const publicResponses = [resOverview, resOpps, resSectors, resReferenceSymbols];
+      const failed = publicResponses.find((response) => !response.ok);
+      if (failed) {
+        throw new Error(await responseErrorMessage(failed, `به‌روزرسانی ناقص ماند (HTTP ${failed.status}).`));
       }
 
-      if (resOverview.ok) setOverview(await resOverview.json());
-      if (resOpps.ok) setOpportunities(await resOpps.json());
-      if (resSectors.ok) setSectors(await resSectors.json());
+      setOverview(await resOverview.json());
+      setOpportunities(await resOpps.json());
+      setSectors(await resSectors.json());
+      setReferenceSymbols(await resReferenceSymbols.json());
+      // Private portfolio expiry must never suppress fresh public market data.
+      const resPort = await fetch("/api/v1/paper/portfolio", { credentials: "same-origin", cache: "no-store" });
       if (resPort.ok) {
         const portData = await resPort.json();
         setPortfolio(portData);
         const openCount = (portData.positions || []).filter((p: any) => p.is_open).length;
         setOpenPositionsCount(openCount);
+      } else if (resPort.status === 401) {
+        window.dispatchEvent(new Event("radar:auth-required"));
+        setPortfolio(null);
+        setOpenPositionsCount(0);
+      } else {
+        throw new Error(await responseErrorMessage(resPort, `دریافت پرتفوی ناقص ماند (HTTP ${resPort.status}).`));
       }
+      setRefreshError(null);
 
       const now = new Date();
       const timeStr = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}:${String(now.getSeconds()).padStart(2, "0")}`;
       setLastUpdatedTime(timeStr);
     } catch (e: any) {
       console.error("Global refresh error:", e);
-      if (manual) {
-        setRefreshError(e.message || "خطا در برقراری ارتباط با وب‌سرویس بورس و پایگاه داده. لطفاً اتصال را بررسی نمایید.");
-      }
+      setRefreshError(e.message || "به‌روزرسانی کامل نشد؛ اتصال منبع داده و نشست مالک را بررسی کنید.");
     } finally {
       if (manual) setIsRefreshing(false);
       setLoading(false);
     }
   }, []);
 
-  // Fetch recommended cadence on mount & periodic check
+  // Session-aware recursive timer. Outside market it performs one local read,
+  // then sleeps exactly until the next open; it does not poll every minute.
   useEffect(() => {
-    fetch("/api/v1/market/session-state")
-      .then((r) => r.json())
-      .then((data) => {
-        if (data && data.cadence_seconds) {
-          setCadenceSeconds(data.cadence_seconds);
-        }
-      })
-      .catch(() => {});
-  }, []);
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
 
-  // Initial Load + Auto Adaptive Periodic Refresh (Silent background updates without unmounting DOM)
-  useEffect(() => {
-    fetchGlobalData(false);
+    const run = async (initial: boolean) => {
+      let session: any = null;
+      try {
+        const response = await fetch("/api/v1/market/session-state", { cache: "no-store" });
+        if (response.ok) session = await response.json();
+      } catch {
+        // Public/local dashboard loading still works if the clock route fails.
+      }
+      if (cancelled) return;
+      if (session) {
+        setMarketSession(session);
+        setCadenceSeconds(Number(session.cadence_seconds || 60));
+      }
+      if (initial || session?.upstream_requests_allowed) {
+        await fetchGlobalData(false);
+      }
+      if (!cancelled && isAutoRefreshEnabled) {
+        const delaySeconds = Math.max(5, Number(session?.cadence_seconds || 60));
+        timer = setTimeout(() => run(false), delaySeconds * 1000);
+      }
+    };
 
-    if (!isAutoRefreshEnabled) return;
-
-    const intervalMs = Math.max(5000, cadenceSeconds * 1000);
-    const timer = setInterval(() => {
-      fetchGlobalData(false);
-    }, intervalMs);
-
-    return () => clearInterval(timer);
-  }, [isAutoRefreshEnabled, cadenceSeconds, fetchGlobalData]);
+    run(true);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [isAutoRefreshEnabled, fetchGlobalData]);
 
   const getTabTitle = (tab: NavTab) => {
     switch (tab) {
@@ -189,7 +247,7 @@ export default function DashboardPage() {
       case "opportunities": return "دیده‌بان جامع، فیلتر دسته‌بندی‌شده و رادار سهام";
       case "open_positions": return "میزکار تخصصی معاملات باز، رصد سود/زیان و مدیریت سرمایه";
       case "fundamental": return "مرکز تحلیل بنیادی، نسبت‌های مالی، ارزش‌گذاری و اطلاعیه‌های کدال";
-      case "trading_lab": return "مرکز آزمایشگاه، معاملات آزمایشی، شبیه‌ساز بک‌تست و ارزیابی استراتژی‌ها";
+      case "trading_lab": return "مرکز بهبود معاملات: ثبت نتیجه، تحلیل ضرر و تنظیم کنترل‌شده";
       case "health_settings": return "سلامت خط دریافت داده، پایش وب‌سرویس و تنظیمات سامانه";
       default: return "رادار بازار سرمایه ایران";
     }
@@ -203,23 +261,28 @@ export default function DashboardPage() {
     }
   };
 
+  if (!authChecked) {
+    return <div style={{ minHeight: "100vh", background: "var(--bg-primary)" }} />;
+  }
+
   return (
-    <div style={{ display: "flex", minHeight: "100vh", backgroundColor: "var(--bg-primary)" }}>
+    <div className="app-shell" style={{ display: "flex", minHeight: "100vh", backgroundColor: "var(--bg-primary)" }}>
       {/* 1. Right Navigation Sidebar */}
       <Sidebar
         activeTab={activeTab}
         onSelectTab={handleSelectTab}
         opportunityCount={opportunities.length}
         openPositionsCount={openPositionsCount}
+        ownerName={currentUser}
       />
 
       {/* 2. Main Content Area */}
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
+      <div className="app-main" style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
         {/* Top Status Header with Single Global Refresh and Live Search */}
         <Header
           currentViewTitle={getTabTitle(activeTab)}
-          regime={overview?.market_regime || "risk_on"}
-          regimeFa={overview?.market_regime_fa || "رونق و تقاضای پرقدرت"}
+          regime={overview?.market_regime || "unknown"}
+          regimeFa={overview?.market_regime_fa || "نامشخص — داده معتبر دریافت نشده"}
           jalaliTime={overview?.current_time_jalali || ""}
           tradingMode={overview?.trading_mode || "paper"}
           isRefreshing={isRefreshing}
@@ -229,7 +292,27 @@ export default function DashboardPage() {
           isAutoRefreshEnabled={isAutoRefreshEnabled}
           onToggleAutoRefresh={toggleAutoRefresh}
           cadenceSeconds={cadenceSeconds}
+          marketSession={marketSession}
+          lastMarketUpdateAt={referenceSymbols?.meta?.last_success_at}
         />
+
+        {lastRefreshResult && (
+          <div
+            role="status"
+            style={{
+              margin: "0.75rem 1.75rem 0",
+              padding: "0.65rem 0.9rem",
+              borderRadius: "8px",
+              border: `1px solid ${lastRefreshResult.tradeEligible ? "rgba(34,197,94,0.45)" : "rgba(245,158,11,0.45)"}`,
+              backgroundColor: lastRefreshResult.tradeEligible ? "rgba(34,197,94,0.10)" : "rgba(245,158,11,0.10)",
+              color: lastRefreshResult.tradeEligible ? "var(--tse-green)" : "var(--tse-amber)",
+              fontSize: "0.8rem",
+              fontWeight: 700,
+            }}
+          >
+            آخرین نتیجه به‌روزرسانی ({lastRefreshResult.timestamp}): {lastRefreshResult.message}
+          </div>
+        )}
 
         {/* Live Refresh Toast Notification */}
         {refreshToast && (
@@ -317,11 +400,11 @@ export default function DashboardPage() {
         {/* View Router — Stable DOM tree: display:none preserves scroll pos & component state */}
         <main style={{ padding: "0", flex: 1, overflowY: "auto" }}>
           {/* Overview — always mounted (default tab) */}
-          <div style={{ padding: "1.5rem 1.75rem", display: activeTab === "overview" ? "block" : "none" }}>
+          <div className="app-view" style={{ padding: "1.5rem 1.75rem", display: activeTab === "overview" ? "block" : "none" }}>
             <OverviewView
               overviewData={overview}
               portfolioData={portfolio}
-              topOpportunities={opportunities}
+              topOpportunities={opportunities.filter((item: any) => item.actionable === true)}
               sectors={sectors}
               onSelectOpportunity={handleOpenSymbolModal}
               onSelectSymbol={handleOpenSymbolModal}
@@ -331,9 +414,10 @@ export default function DashboardPage() {
 
           {/* Opportunities — lazy-mounted on first visit */}
           {(visitedTabs.has("opportunities") || activeTab === "opportunities") && (
-            <div style={{ padding: "1.5rem 1.75rem", display: activeTab === "opportunities" ? "block" : "none" }}>
+            <div className="app-view" style={{ padding: "1.5rem 1.75rem", display: activeTab === "opportunities" ? "block" : "none" }}>
               <OpportunitiesView
                 opportunities={opportunities}
+                referenceSymbols={referenceSymbols}
                 onSelectOpportunity={handleOpenSymbolModal}
                 onSelectSymbol={handleOpenSymbolModal}
               />
@@ -342,7 +426,7 @@ export default function DashboardPage() {
 
           {/* Open Positions — lazy-mounted on first visit */}
           {(visitedTabs.has("open_positions") || activeTab === "open_positions") && (
-            <div style={{ display: activeTab === "open_positions" ? "block" : "none" }}>
+            <div className="app-view" style={{ display: activeTab === "open_positions" ? "block" : "none" }}>
               <OpenPositionsView
                 initialPortfolio={portfolio}
                 onSelectSymbol={handleOpenSymbolModal}
@@ -352,7 +436,7 @@ export default function DashboardPage() {
 
           {/* Fundamental — lazy-mounted on first visit */}
           {(visitedTabs.has("fundamental") || activeTab === "fundamental") && (
-            <div style={{ padding: "1.5rem 1.75rem", display: activeTab === "fundamental" ? "block" : "none" }}>
+            <div className="app-view" style={{ padding: "1.5rem 1.75rem", display: activeTab === "fundamental" ? "block" : "none" }}>
               <FundamentalView
                 onSelectSymbol={handleOpenSymbolModal}
               />
@@ -361,14 +445,14 @@ export default function DashboardPage() {
 
           {/* Trading Lab — lazy-mounted on first visit */}
           {(visitedTabs.has("trading_lab") || activeTab === "trading_lab") && (
-            <div style={{ padding: "1.5rem 1.75rem", display: activeTab === "trading_lab" ? "block" : "none" }}>
+            <div className="app-view" style={{ padding: "1.5rem 1.75rem", display: activeTab === "trading_lab" ? "block" : "none" }}>
               <TradingLabView />
             </div>
           )}
 
           {/* Health & Settings — lazy-mounted on first visit */}
           {(visitedTabs.has("health_settings") || activeTab === "health_settings") && (
-            <div style={{ padding: "1.5rem 1.75rem", display: activeTab === "health_settings" ? "block" : "none" }}>
+            <div className="app-view" style={{ padding: "1.5rem 1.75rem", display: activeTab === "health_settings" ? "block" : "none" }}>
               <HealthSettingsView />
             </div>
           )}
@@ -388,6 +472,7 @@ export default function DashboardPage() {
           onLoginSuccess={(user) => {
             setIsAuthenticated(true);
             setCurrentUser(user);
+            setRefreshError(null);
             fetchGlobalData(false);
           }}
         />

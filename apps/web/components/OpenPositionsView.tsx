@@ -50,6 +50,7 @@ export const OpenPositionsView: React.FC<OpenPositionsViewProps> = ({ initialPor
   // Portfolio State
   const [portfolio, setPortfolio] = useState<any>(initialPortfolio || null);
   const [openLoading, setOpenLoading] = useState(!initialPortfolio);
+  const [portfolioError, setPortfolioError] = useState<string | null>(null);
 
   // History State
   const [historyItems, setHistoryItems] = useState<any[]>([]);
@@ -79,13 +80,19 @@ export const OpenPositionsView: React.FC<OpenPositionsViewProps> = ({ initialPor
   const fetchPortfolioData = async () => {
     try {
       setOpenLoading(true);
-      const res = await fetch("/api/v1/paper/portfolio");
-      if (res.ok) {
-        const data = await res.json();
-        setPortfolio(data);
+      const res = await fetch("/api/v1/paper/portfolio", { credentials: "same-origin", cache: "no-store" });
+      if (res.status === 401) {
+        window.dispatchEvent(new Event("radar:auth-required"));
+        throw new Error("نشست مالک منقضی شده است؛ اعداد مالی نمایش داده نمی‌شوند.");
       }
+      if (!res.ok) throw new Error(`پورتفوی واقعی دریافت نشد (HTTP ${res.status}).`);
+      const data = await res.json();
+      setPortfolio(data);
+      setPortfolioError(null);
     } catch (e) {
       console.error("Error fetching portfolio:", e);
+      setPortfolio(null);
+      setPortfolioError(e instanceof Error ? e.message : "پورتفوی واقعی دریافت نشد.");
     } finally {
       setOpenLoading(false);
     }
@@ -132,6 +139,14 @@ export const OpenPositionsView: React.FC<OpenPositionsViewProps> = ({ initialPor
   useEffect(() => {
     fetchPortfolioData();
   }, []);
+
+  useEffect(() => {
+    if (initialPortfolio) {
+      setPortfolio(initialPortfolio);
+      setPortfolioError(null);
+      setOpenLoading(false);
+    }
+  }, [initialPortfolio]);
 
   useEffect(() => {
     if (activeSubTab === "history") {
@@ -222,7 +237,23 @@ export const OpenPositionsView: React.FC<OpenPositionsViewProps> = ({ initialPor
     window.open(`/api/v1/trade-history/export/csv?${params.toString()}`, "_blank");
   };
 
-  const openPositionsList = (portfolio?.positions || []).filter((p: any) => p.is_open);
+  if (openLoading && !portfolio) {
+    return (
+      <div role="status" className="card" style={{ margin: "1.5rem", padding: "2rem", textAlign: "center", color: "var(--text-secondary)" }}>
+        در حال خواندن پورتفوی واقعی و دفترکل کمپین…
+      </div>
+    );
+  }
+
+  if (portfolioError || !portfolio) {
+    return (
+      <div role="alert" className="card" style={{ margin: "1.5rem", padding: "2rem", textAlign: "center", borderColor: "var(--tse-red)", color: "var(--tse-red)" }}>
+        {portfolioError || "پورتفوی واقعی در دسترس نیست؛ هیچ عدد نمونه‌ای نمایش داده نمی‌شود."}
+      </div>
+    );
+  }
+
+  const openPositionsList = (portfolio.positions || []).filter((p: any) => p.is_open);
 
   const filteredOpenPositions = openPositionsList.filter((p: any) => {
     if (openFilter === "profit") return (p.unrealized_pnl || 0) > 0;
@@ -263,6 +294,21 @@ export const OpenPositionsView: React.FC<OpenPositionsViewProps> = ({ initialPor
         </div>
       )}
 
+      <div className="card" style={{ padding: "0.8rem 1rem", display: "flex", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap", color: "var(--text-secondary)", fontSize: "0.78rem" }}>
+        <span>
+          کمپین ثابت: <b style={{ color: "var(--text-primary)", direction: "ltr", unicodeBidi: "isolate" }}>{portfolio.campaign_id || portfolio.id}</b>
+        </span>
+        <span>
+          شروع: <b style={{ color: "var(--text-primary)" }}>{portfolio.campaign_started_at ? new Date(portfolio.campaign_started_at).toLocaleString("fa-IR") : "ثبت نشده"}</b>
+        </span>
+        <span>
+          پایان برنامه‌ریزی‌شده: <b style={{ color: "var(--text-primary)" }}>{portfolio.campaign_ends_at ? new Date(portfolio.campaign_ends_at).toLocaleDateString("fa-IR") : "ثبت نشده"}</b>
+        </span>
+        <span>
+          دفترکل: <b style={{ color: "var(--text-primary)" }}>{formatNumberFa(portfolio.ledger_sequence ?? 0)}</b> رویداد • snapshot: <b style={{ color: "var(--text-primary)", direction: "ltr", unicodeBidi: "isolate" }}>{portfolio.portfolio_snapshot_id || "—"}</b>
+        </span>
+      </div>
+
       {/* Main Subtab Navigation */}
       <div
         style={{
@@ -271,12 +317,14 @@ export const OpenPositionsView: React.FC<OpenPositionsViewProps> = ({ initialPor
           alignItems: "center",
           borderBottom: "1px solid rgba(255, 255, 255, 0.08)",
           paddingBottom: "0.85rem",
+          gap: "0.75rem",
+          overflowX: "auto",
         }}
       >
-        <div style={{ display: "flex", gap: "0.6rem" }}>
+        <div style={{ display: "flex", gap: "0.6rem", flex: "0 0 auto" }}>
           {[
             { id: "open", label: `معاملات باز (${toPersianDigits(openPositionsList.length)})`, icon: Briefcase },
-            { id: "history", label: `تاریخچه کامل معاملات (${toPersianDigits(historyTotal || 19)})`, icon: History },
+            { id: "history", label: `تاریخچه کامل معاملات (${toPersianDigits(historyTotal)})`, icon: History },
             { id: "orders", label: "دفتر سفارش‌ها و لاگ دفترکل", icon: FileSpreadsheet },
           ].map((tab) => {
             const Icon = tab.icon;
@@ -298,6 +346,8 @@ export const OpenPositionsView: React.FC<OpenPositionsViewProps> = ({ initialPor
                   border: isActive ? "1px solid rgba(59, 130, 246, 0.4)" : "1px solid transparent",
                   cursor: "pointer",
                   transition: "all 0.18s ease",
+                  flex: "0 0 auto",
+                  whiteSpace: "nowrap",
                 }}
               >
                 <Icon size={17} />
@@ -317,6 +367,8 @@ export const OpenPositionsView: React.FC<OpenPositionsViewProps> = ({ initialPor
               gap: "0.45rem",
               padding: "0.55rem 1.1rem",
               fontSize: "0.82rem",
+              flex: "0 0 auto",
+              whiteSpace: "nowrap",
             }}
           >
             <Download size={15} /> خروجی اکسل و CSV
@@ -329,51 +381,50 @@ export const OpenPositionsView: React.FC<OpenPositionsViewProps> = ({ initialPor
         <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
           {/* Portfolio Summary Banner - Institutional KPI Cards */}
           <div
+            data-testid="open-portfolio-kpis"
             style={{
               display: "grid",
-              gridTemplateColumns: "repeat(4, 1fr)",
+              gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
               gap: "1rem",
             }}
           >
-            <div className="kpi-card">
+            <div className="kpi-card" data-testid="open-portfolio-kpi">
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
                 <span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>ارزش کل دارایی (NAV)</span>
                 <Wallet size={18} color="var(--text-secondary)" />
               </div>
               <div style={{ fontSize: "1.35rem", fontWeight: 800, color: "#ffffff" }}>
-                {portfolio?.total_equity_tomans ? formatToman(portfolio.total_equity_tomans) : "۱,۰۴۲,۰۵۰,۰۰۰ تومان"}
+                {formatToman(portfolio.total_equity / 10)}
               </div>
             </div>
 
-            <div className="kpi-card">
+            <div className="kpi-card" data-testid="open-portfolio-kpi">
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
                 <span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>نقدینگی صیانت‌شده</span>
                 <Lock size={18} color="var(--tse-gold)" />
               </div>
               <div style={{ fontSize: "1.35rem", fontWeight: 800, color: "var(--tse-gold)" }}>
-                {portfolio?.cash_tomans ? formatToman(portfolio.cash_tomans) : "۳۱۵,۰۰۰,۰۰۰ تومان"}
+                {formatToman(portfolio.cash / 10)}
               </div>
             </div>
 
-            <div className="kpi-card">
+            <div className="kpi-card" data-testid="open-portfolio-kpi">
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
                 <span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>سود/زیان باز جاری (Unrealized)</span>
-                <TrendingUp size={18} color={(portfolio?.total_unrealized_pnl_tomans || 0) >= 0 ? "var(--tse-green)" : "var(--tse-red)"} />
+                <TrendingUp size={18} color={portfolio.unrealized_pnl >= 0 ? "var(--tse-green)" : "var(--tse-red)"} />
               </div>
               <div
                 style={{
                   fontSize: "1.35rem",
                   fontWeight: 800,
-                  color: (portfolio?.total_unrealized_pnl_tomans || 0) >= 0 ? "var(--tse-green)" : "var(--tse-red)",
+                  color: portfolio.unrealized_pnl >= 0 ? "var(--tse-green)" : "var(--tse-red)",
                 }}
               >
-                {portfolio?.total_unrealized_pnl_tomans
-                  ? `${portfolio.total_unrealized_pnl_tomans > 0 ? "+" : ""}${formatToman(portfolio.total_unrealized_pnl_tomans)}`
-                  : "+۱۶,۸۵۰,۰۰۰ تومان"}
+                {portfolio.unrealized_pnl > 0 ? "+" : ""}{formatToman(portfolio.unrealized_pnl / 10)}
               </div>
             </div>
 
-            <div className="kpi-card">
+            <div className="kpi-card" data-testid="open-portfolio-kpi">
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
                 <span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>موقعیت‌های فعال در سبد</span>
                 <Activity size={18} color="var(--tse-blue)" />
@@ -385,8 +436,8 @@ export const OpenPositionsView: React.FC<OpenPositionsViewProps> = ({ initialPor
           </div>
 
           {/* Filter Bar & View Toggle */}
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "0.25rem" }}>
-            <div style={{ display: "flex", gap: "0.5rem" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "0.25rem", gap: "0.6rem", overflowX: "auto", paddingBottom: "0.2rem" }}>
+            <div style={{ display: "flex", gap: "0.5rem", flex: "0 0 auto" }}>
               {[
                 { id: "all", label: "همه موقعیت‌ها" },
                 { id: "profit", label: "سودده‌ها" },
@@ -406,6 +457,8 @@ export const OpenPositionsView: React.FC<OpenPositionsViewProps> = ({ initialPor
                     border: openFilter === f.id ? "1px solid rgba(255, 255, 255, 0.25)" : "1px solid rgba(255, 255, 255, 0.06)",
                     cursor: "pointer",
                     transition: "all 0.15s ease",
+                    flex: "0 0 auto",
+                    whiteSpace: "nowrap",
                   }}
                 >
                   {f.label}
@@ -413,7 +466,7 @@ export const OpenPositionsView: React.FC<OpenPositionsViewProps> = ({ initialPor
               ))}
             </div>
 
-            <div style={{ display: "flex", gap: "0.3rem", backgroundColor: "rgba(255,255,255,0.03)", padding: "0.2rem", borderRadius: "6px" }}>
+            <div style={{ display: "flex", gap: "0.3rem", backgroundColor: "rgba(255,255,255,0.03)", padding: "0.2rem", borderRadius: "6px", flex: "0 0 auto" }}>
               <button
                 onClick={() => setViewMode("cards")}
                 style={{
@@ -459,7 +512,7 @@ export const OpenPositionsView: React.FC<OpenPositionsViewProps> = ({ initialPor
               </p>
             </div>
           ) : viewMode === "cards" ? (
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(360px, 1fr))", gap: "1.25rem" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 360px), 1fr))", gap: "1.25rem" }}>
               {filteredOpenPositions.map((pos: any) => {
                 const retPct = pos.average_entry_price > 0
                   ? ((pos.current_price - pos.average_entry_price) / pos.average_entry_price) * 100
@@ -488,7 +541,7 @@ export const OpenPositionsView: React.FC<OpenPositionsViewProps> = ({ initialPor
                           <span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>{pos.company_name || pos.name_fa}</span>
                         </div>
                         <div style={{ fontSize: "0.76rem", color: "var(--tse-gold)", marginTop: "0.25rem" }}>
-                          {pos.entry_reason_fa || "مومنتوم مقطعی و ورود نقدینگی"}
+                          {pos.entry_reason_fa || "دلیل ورود ثبت نشده است"}
                         </div>
                       </div>
 
@@ -668,7 +721,7 @@ export const OpenPositionsView: React.FC<OpenPositionsViewProps> = ({ initialPor
             <div
               style={{
                 display: "grid",
-                gridTemplateColumns: "repeat(6, 1fr)",
+                gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
                 gap: "0.85rem",
               }}
             >

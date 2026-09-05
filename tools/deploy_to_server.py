@@ -24,9 +24,11 @@ ZIP_FILENAME = "iran_market_radar_deploy.zip"
 
 EXCLUDE_NAMES = {
     ".git", "node_modules", "venv", ".venv", ".next", "__pycache__",
-    ".pytest_cache", ".gemini", "backups", "logs", ".vscode", ".idea"
+    ".pytest_cache", ".gemini", "backups", "logs", ".vscode", ".idea",
+    "graphify-out", ".secrets", "output"
 }
 EXCLUDE_EXTS = {".zip", ".pyc", ".db", ".log", ".tar.gz"}
+EXCLUDE_FILES = {".env", ".env.local", ".env.production"}
 
 
 def create_deployment_zip() -> Path:
@@ -38,7 +40,7 @@ def create_deployment_zip() -> Path:
         for root, dirs, files in os.walk(ROOT_DIR):
             dirs[:] = [d for d in dirs if d not in EXCLUDE_NAMES]
             for file in files:
-                if any(file.endswith(ext) for ext in EXCLUDE_EXTS) or file == ZIP_FILENAME:
+                if file in EXCLUDE_FILES or any(file.endswith(ext) for ext in EXCLUDE_EXTS) or file == ZIP_FILENAME:
                     continue
                 file_path = Path(root) / file
                 arcname = file_path.relative_to(ROOT_DIR)
@@ -124,7 +126,7 @@ def deploy_to_server():
         print("🎉 DEPLOYMENT SUCCESSFUL — IRAN MARKET RADAR IS ONLINE!")
         print(f"🌐 Frontend Web UI: http://{SERVER_IP}:3742")
         print(f"🚀 Backend API: http://{SERVER_IP}:8742/docs")
-        print("🔐 Default Admin: admin / radar2026 (Persistent 30-Day Session)")
+        print("🔐 Administrator credentials are read from the server-only environment file.")
         print("=" * 70)
         return True
 

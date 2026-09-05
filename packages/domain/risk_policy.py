@@ -73,6 +73,18 @@ class StagedEntryConfig:
     allow_averaging_down: bool = False
 
 
+@dataclass(frozen=True)
+class ExitManagementConfig:
+    """Rules expressed in initial-risk (R), never arbitrary price percentages."""
+    scale_in_min_r: float = 0.50
+    scale_in_max_r: float = 1.00
+    trim_at_r: float = 2.00
+    trim_fraction: float = 0.25
+    breakeven_trigger_r: float = 1.00
+    lock_half_r_trigger_r: float = 2.00
+    lock_one_r_trigger_r: float = 3.00
+
+
 @dataclass
 class RiskPolicy:
     """Institutional Central Risk Policy Model."""
@@ -120,6 +132,7 @@ class RiskPolicy:
     drawdown_ladder: DrawdownLadder = field(default_factory=DrawdownLadder)
     daily_circuit_breaker: DailyLossCircuitBreaker = field(default_factory=DailyLossCircuitBreaker)
     staged_entry: StagedEntryConfig = field(default_factory=StagedEntryConfig)
+    exit_management: ExitManagementConfig = field(default_factory=ExitManagementConfig)
 
     @property
     def tse_equity_roundtrip_fee_pct(self) -> float:

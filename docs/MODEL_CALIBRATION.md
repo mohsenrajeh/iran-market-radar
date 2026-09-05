@@ -1,20 +1,22 @@
-# Machine Learning Calibration & Statistical Validation — Iran Market Radar
+# کالیبراسیون مدل و اعتبار آماری
 
-## 1. Distinction Between Score & Probability
-- **Composite Score ($0 \dots 100$)**: Multi-factor ordinal ranking indicating relative opportunity strength.
-- **Calibrated Probability ($p_{\text{profit}} \in [0, 1]$)**: Calibrated posterior probability derived from Isotonic Regression.
+## وضعیت فعلی
 
----
+در کمپین فعال هیچ مدل `Champion` اثبات‌شده‌ای وجود ندارد. کالیبراتور `SignalProbabilityCalibrator` تا زمانی که با پیش‌بینی‌های خارج از نمونه و برچسب‌های واقعی برازش نشود، `UNFITTED` است؛ در این حالت `p_profit=0` فقط sentinel دیتابیس است و سیگنال حتماً غیرقابل اقدام می‌ماند.
 
-## 2. Active Model Version & Calibration Metrics
-- **Champion Model**: `v2.4.0-ISOTONIC-LOCKED`
-- **Label Definition (`LABEL_CONTRACT_v1`)**: Net realized return $> +0.0\%$ after deducting $1.2562\%$ fees and $20\text{ bps}$ slippage within $5$ trading sessions.
-- **Brier Score**: $0.142$
-- **Expected Calibration Error (ECE)**: $0.048$
-- **Log Loss**: $0.468$
-- **95% Wilson Confidence Interval**: Computed on all reliability bins.
+هیچ Brier Score، ECE، Log Loss یا reliability curve بدون داده واقعی محاسبه و نمایش داده نمی‌شود.
 
----
+## قرارداد برچسب
 
-## 3. Production Champion / Challenger Workflow
-Production decision weights remain frozen and immune to online overfitting from small sample trade counts ($n=6$). Any proposed parameter adaptation must pass offline walk-forward backtesting, out-of-sample validation, and risk committee approval.
+برچسب سود باید از بازده خالص پس از تمام کارمزد، مالیات، اسلیپیج و محدودیت اجرای بازار در افق مشخص ساخته شود. تعریف افق و هزینه‌ها همراه نسخه dataset ذخیره می‌شود و پس از مشاهده نتیجه قابل تغییر نیست.
+
+## روند اعتبارسنجی
+
+1. جداسازی زمانی train، validation و out-of-sample؛
+2. walk-forward و purged/embargoed split برای جلوگیری از leakage؛
+3. برازش calibration فقط روی پیش‌بینی‌هایی که برای همان نمونه in-sample نبوده‌اند؛
+4. گزارش Brier، ECE، Log Loss، تعداد نمونه هر bin و فاصله اطمینان؛
+5. حداقل ۵۰ معامله قدیمی‌تر برای train و ۲۰ معامله جدیدتر برای OOS، با پوشش حداقل دو رژیم بازار؛
+6. promotion فقط بعد از backtest، OOS، paper challenger و ثبت approver.
+
+سود یک معامله یا نمونه کم، وزن production را تغییر نمی‌دهد. پیشنهادهای یادگیری وارد Research Queue می‌شوند و بدون شواهد کافی قابل promotion نیستند.

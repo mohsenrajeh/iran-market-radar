@@ -30,9 +30,19 @@ import {
   toPersianDigits,
 } from "../lib/formatters";
 
+async function labError(response: Response, fallback: string): Promise<string> {
+  try {
+    const payload = await response.json();
+    if (typeof payload?.detail === "string") return payload.detail;
+  } catch {
+    // Use the bounded fallback below.
+  }
+  return fallback;
+}
+
 export const TradingLabView: React.FC = () => {
   const [activeSubTab, setActiveSubTab] = useState<
-    "performance" | "post_mortems" | "research_queue" | "validation" | "paper" | "backtest"
+    "performance" | "post_mortems" | "research_queue"
   >("performance");
 
   const [loading, setLoading] = useState(true);
@@ -41,6 +51,7 @@ export const TradingLabView: React.FC = () => {
   const [lessons, setLessons] = useState<any[]>([]);
   const [researchProposals, setResearchProposals] = useState<any[]>([]);
   const [challengers, setChallengers] = useState<any[]>([]);
+  const [calibrationArtifacts, setCalibrationArtifacts] = useState<any[]>([]);
 
   // Filtering state
   const [lessonCategory, setLessonCategory] = useState<string>("");
@@ -50,23 +61,72 @@ export const TradingLabView: React.FC = () => {
   const fetchLabData = async () => {
     try {
       setLoading(true);
-      const [resDashboard, resPerfs, resLessons, resProposals, resChallengers] = await Promise.all([
+      const [resDashboard, resPerfs, resLessons, resProposals, resChallengers, resCalibration] = await Promise.all([
         fetch("/api/v1/learning/dashboard"),
         fetch("/api/v1/learning/strategies/performance"),
         fetch("/api/v1/learning/post-mortems"),
         fetch("/api/v1/learning/research-queue"),
         fetch("/api/v1/learning/research-queue?status=PAPER_CHALLENGER"),
+        fetch("/api/v1/learning/calibration/artifacts"),
       ]);
-
-      if (resDashboard.ok) setDashboardData(await resDashboard.json());
-      if (resPerfs.ok) setStrategyPerfs(await resPerfs.json());
-      if (resLessons.ok) setLessons(await resLessons.json());
-      if (resProposals.ok) setResearchProposals(await resProposals.json());
-      if (resChallengers.ok) setChallengers(await resChallengers.json());
-    } catch (e) {
+      const responses = [resDashboard, resPerfs, resLessons, resProposals, resChallengers, resCalibration];
+      if (responses.some((response) => response.status === 401)) {
+        window.dispatchEvent(new Event("radar:auth-required"));
+        throw new Error("نشست شما منقضی شده است؛ دوباره وارد شوید.");
+      }
+      const failed = responses.find((response) => !response.ok);
+      if (failed) throw new Error(await labError(failed, `دریافت بخش یادگیری با خطای ${failed.status} متوقف شد.`));
+      setDashboardData(await resDashboard.json());
+      setStrategyPerfs(await resPerfs.json());
+      setLessons(await resLessons.json());
+      setResearchProposals(await resProposals.json());
+      setChallengers(await resChallengers.json());
+      setCalibrationArtifacts(await resCalibration.json());
+    } catch (e: any) {
       console.error("Error fetching Trading Lab data:", e);
+      setFeedbackMsg({ type: "error", text: e?.message || "بخش یادگیری به‌روز نشد." });
     } finally {
       setLoading(false);
+    }
+  };
+
+  const trainCalibrationCandidate = async () => {
+    setActionLoadingId("calibration-train");
+    setFeedbackMsg(null);
+    try {
+      const response = await fetch("/api/v1/learning/calibration/train-candidate", { method: "POST" });
+      if (response.status === 401) {
+        window.dispatchEvent(new Event("radar:auth-required"));
+        throw new Error("نشست شما منقضی شده است؛ دوباره وارد شوید.");
+      }
+      if (!response.ok) throw new Error(await labError(response, "ساخت نسخه آزمایشی ممکن نشد."));
+      const payload = await response.json();
+      setFeedbackMsg({ type: payload.success ? "success" : "error", text: payload.message });
+      await fetchLabData();
+    } catch (error: any) {
+      setFeedbackMsg({ type: "error", text: error?.message || "ساخت نسخه آزمایشی ممکن نشد." });
+    } finally {
+      setActionLoadingId(null);
+    }
+  };
+
+  const activateCalibration = async (artifactId: string) => {
+    setActionLoadingId(artifactId);
+    setFeedbackMsg(null);
+    try {
+      const response = await fetch(`/api/v1/learning/calibration/${artifactId}/activate`, { method: "POST" });
+      if (response.status === 401) {
+        window.dispatchEvent(new Event("radar:auth-required"));
+        throw new Error("نشست شما منقضی شده است؛ دوباره وارد شوید.");
+      }
+      if (!response.ok) throw new Error(await labError(response, "فعال‌سازی نسخه ممکن نشد."));
+      const payload = await response.json();
+      setFeedbackMsg({ type: "success", text: payload.message });
+      await fetchLabData();
+    } catch (error: any) {
+      setFeedbackMsg({ type: "error", text: error?.message || "فعال‌سازی نسخه ممکن نشد." });
+    } finally {
+      setActionLoadingId(null);
     }
   };
 
@@ -74,21 +134,15 @@ export const TradingLabView: React.FC = () => {
     fetchLabData();
   }, []);
 
-  const handleProposalAction = async (proposalId: string, action: "backtest" | "oos_validate" | "paper_test" | "promote") => {
+  const handleProposalAction = async (proposalId: string, action: "backtest" | "oos_validate" | "paper_challenger" | "promote") => {
     setActionLoadingId(proposalId);
     setFeedbackMsg(null);
     try {
-      const actMap = {
-        backtest: "backtest",
-        oos_validate: "oos_validate",
-        paper_test: "paper_challenger",
-        promote: "promote",
-      };
       const endpoint = `/api/v1/learning/proposals/${proposalId}/action`;
       const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: actMap[action] || action }),
+        body: JSON.stringify({ action }),
       });
       const data = await res.json();
       if (res.ok) {
@@ -132,12 +186,53 @@ export const TradingLabView: React.FC = () => {
         </div>
       )}
 
-      {/* Top Header Summary — 5 Institutional KPI Cards */}
+      {dashboardData && (
+        <div className="card" style={{ padding: "1.25rem", display: "flex", flexDirection: "column", gap: "1rem" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "center", flexWrap: "wrap" }}>
+            <div>
+              <h3 style={{ margin: 0, color: "#fff", fontSize: "1rem" }}>چرخه بهبود کنترل‌شده معاملات</h3>
+              <p style={{ margin: "0.35rem 0 0", color: "var(--text-secondary)", fontSize: "0.82rem" }}>{dashboardData.next_action_fa}</p>
+            </div>
+            <button
+              className="btn-primary"
+              onClick={trainCalibrationCandidate}
+              disabled={dashboardData.tuning_stage !== "READY_FOR_CANDIDATE" || actionLoadingId === "calibration-train"}
+              style={{ padding: "0.55rem 0.9rem", fontSize: "0.8rem" }}
+            >
+              <Play size={15} /> ساخت نسخه آزمایشی احتمال‌سنجی
+            </button>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "0.65rem" }}>
+            {["ثبت معامله و دلیل", "تحلیل سود/ضرر", "ساخت پیشنهاد", "آزمون روی داده ندیده", "فعال‌سازی قابل بازگشت"].map((label, index) => (
+              <div key={label} style={{ padding: "0.65rem", background: "rgba(255,255,255,0.03)", borderRadius: 6, fontSize: "0.76rem", color: "var(--text-secondary)" }}>
+                <strong style={{ color: "var(--tse-blue)" }}>{toPersianDigits(index + 1)}.</strong> {label}
+              </div>
+            ))}
+          </div>
+          <div style={{ fontSize: "0.76rem", color: "var(--text-secondary)" }}>
+            وضعیت: <strong style={{ color: "var(--tse-gold)" }}>{dashboardData.tuning_stage_fa}</strong> • معاملات بسته: {toPersianDigits(dashboardData.total_closed_trades)} از {toPersianDigits(dashboardData.minimum_closed_trades_for_tuning)} • وضعیت‌های بازار دیده‌شده: {toPersianDigits(dashboardData.observed_market_regimes)} از ۲
+          </div>
+          {calibrationArtifacts[0] && (
+            <div style={{ padding: "0.75rem", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 7, display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "center", flexWrap: "wrap" }}>
+              <span style={{ fontSize: "0.78rem", color: "var(--text-secondary)" }}>
+                آخرین نسخه: {calibrationArtifacts[0].version} • Brier قبل {toPersianDigits(calibrationArtifacts[0].brier_before)} / بعد {toPersianDigits(calibrationArtifacts[0].brier_after)} • {calibrationArtifacts[0].status}
+              </span>
+              {calibrationArtifacts[0].status === "CANDIDATE" && (
+                <button className="btn-secondary" onClick={() => activateCalibration(calibrationArtifacts[0].id)} disabled={actionLoadingId === calibrationArtifacts[0].id}>
+                  فعال‌سازی نسخه بهترشده
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Top Header Summary */}
       {dashboardData && (
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "repeat(5, 1fr)",
+            gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))",
             gap: "1rem",
           }}
         >
@@ -146,40 +241,40 @@ export const TradingLabView: React.FC = () => {
               معاملات بسته ثبت‌شده
             </span>
             <span style={{ fontSize: "1.3rem", fontWeight: 800, color: "#ffffff" }}>
-              {toPersianDigits(dashboardData.total_closed_trades_logged)} معامله حسابداری
+              {toPersianDigits(dashboardData.total_closed_trades)} معامله حسابداری
             </span>
           </div>
 
           <div className="kpi-card">
             <span style={{ fontSize: "0.78rem", color: "var(--text-secondary)", marginBottom: "0.3rem" }}>
-              وضعیت استراتژی‌های پروداکشن
+              استراتژی‌های دارای نمونه کافی
             </span>
             <span style={{ fontSize: "1.15rem", fontWeight: 800, color: "var(--tse-green)", display: "flex", alignItems: "center", gap: "0.4rem" }}>
-              <Lock size={15} /> {toPersianDigits(12)} استراتژی منجمد (Champion)
+              <Lock size={15} /> {toPersianDigits(dashboardData.validated_strategies_count)} استراتژی
             </span>
           </div>
 
           <div className="kpi-card">
             <span style={{ fontSize: "0.78rem", color: "var(--text-secondary)", marginBottom: "0.3rem" }}>
-              چالشگرهای فعال (Challenger)
+              تنظیم‌های در حال آزمایش
             </span>
             <span style={{ fontSize: "1.3rem", fontWeight: 800, color: "var(--tse-gold)" }}>
-              {toPersianDigits(dashboardData.active_challengers_count || 1)} نسخه آزمایشی
+              {toPersianDigits(dashboardData.active_challengers_count)} نسخه آزمایشی
             </span>
           </div>
 
           <div className="kpi-card">
             <span style={{ fontSize: "0.78rem", color: "var(--text-secondary)", marginBottom: "0.3rem" }}>
-              فرضیات در صف پژوهش (Queue)
+              پیشنهادهای منتظر بررسی
             </span>
             <span style={{ fontSize: "1.3rem", fontWeight: 800, color: "var(--tse-blue)" }}>
-              {toPersianDigits(dashboardData.pending_experiments_count || 5)} پیشنهاد ارتقا
+              {toPersianDigits(dashboardData.pending_experiments_count)} پیشنهاد ارتقا
             </span>
           </div>
 
           <div className="kpi-card">
             <span style={{ fontSize: "0.78rem", color: "var(--text-secondary)", marginBottom: "0.3rem" }}>
-              کفایت آماری دیتاست (Sufficiency)
+              کفایت داده برای یادگیری
             </span>
             <span style={{ fontSize: "0.85rem", fontWeight: 700, color: "#cbd5e1" }}>
               {dashboardData.data_sufficiency_status}
@@ -198,12 +293,9 @@ export const TradingLabView: React.FC = () => {
         }}
       >
         {[
-          { id: "performance", label: "عملکرد و سلامت استراتژی‌ها", icon: BarChart3 },
-          { id: "post_mortems", label: "کالبدشکافی و درس‌های ساختاریافته", icon: Brain },
-          { id: "research_queue", label: "پیشنهادهای بهبود و صف تحقیقات", icon: FlaskConical },
-          { id: "validation", label: "ارزیابی Champion vs Challenger", icon: GitBranch },
-          { id: "paper", label: "پورتفوی آزمایشی پیپر", icon: Briefcase },
-          { id: "backtest", label: "شبیه‌ساز بک‌تست تاریخی", icon: History },
+          { id: "performance", label: "عملکرد واقعی", icon: BarChart3 },
+          { id: "post_mortems", label: "چرا سود یا ضرر کردیم؟", icon: Brain },
+          { id: "research_queue", label: "چه چیزی را بهتر کنیم؟", icon: FlaskConical },
         ].map((tab) => {
           const Icon = tab.icon;
           const isActive = activeSubTab === tab.id;
@@ -240,7 +332,7 @@ export const TradingLabView: React.FC = () => {
           <div className="card" style={{ padding: "0", overflowX: "auto" }}>
             <div style={{ padding: "1.1rem 1.35rem", borderBottom: "1px solid rgba(255,255,255,0.06)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <h3 style={{ fontSize: "0.95rem", fontWeight: 700, margin: 0, color: "var(--tse-gold)", display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                <BarChart3 size={17} /> ماتریس ارزیابی عملکرد و کفایت آماری ۱۲ استراتژی کمّی
+                <BarChart3 size={17} /> عملکرد واقعی ۱۲ استراتژی بر اساس معاملات بسته‌شده
               </h3>
               <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>
                 منبع: دفترکل واقعی معاملات بسته شده
@@ -292,11 +384,11 @@ export const TradingLabView: React.FC = () => {
                       </td>
                       <td style={{ padding: "0.9rem 1.1rem" }}>{formatRFa(s.avg_R, 2)}</td>
                       <td style={{ padding: "0.9rem 1.1rem", fontWeight: 700, color: s.profit_factor >= 1.8 ? "var(--tse-green)" : "var(--tse-gold)" }}>
-                        {toPersianDigits(s.profit_factor)}x
+                        {s.profit_factor != null ? `${toPersianDigits(s.profit_factor)}x` : "—"}
                       </td>
                       <td style={{ padding: "0.9rem 1.1rem", fontSize: "0.76rem" }}>
-                        <span style={{ color: "var(--tse-green)" }}>{formatPercentFa(s.avg_MFE || 0, 1)}</span> /{" "}
-                        <span style={{ color: "var(--tse-red)" }}>{formatPercentFa(-(s.avg_MAE || 0), 1)}</span>
+                        <span style={{ color: "var(--tse-green)" }}>{s.avg_MFE != null ? formatPercentFa(s.avg_MFE, 1) : "—"}</span> /{" "}
+                        <span style={{ color: "var(--tse-red)" }}>{s.avg_MAE != null ? formatPercentFa(-s.avg_MAE, 1) : "—"}</span>
                       </td>
                       <td style={{ padding: "0.9rem 1.1rem", fontSize: "0.76rem", color: "var(--text-secondary)" }}>
                         {toPersianDigits(s.max_consecutive_wins)} برد / {toPersianDigits(s.max_consecutive_losses)} باخت
@@ -328,7 +420,7 @@ export const TradingLabView: React.FC = () => {
                       </td>
                       <td style={{ padding: "0.9rem 1.1rem", textAlign: "center" }}>
                         <span style={{ fontWeight: 800, color: s.health_score >= 85 ? "var(--tse-green)" : "var(--tse-gold)" }}>
-                          {toPersianDigits(s.health_score)}
+                          {s.health_score != null ? toPersianDigits(s.health_score) : "—"}
                         </span>
                       </td>
                     </tr>
@@ -431,12 +523,11 @@ export const TradingLabView: React.FC = () => {
       {activeSubTab === "research_queue" && (
         <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
           <div style={{ fontSize: "0.88rem", color: "var(--text-secondary)" }}>
-            صف تحقیقات فرضیات کمّی — هیچ پیشنهادی حق تغییر مستقیم پروداکشن را ندارد و باید مراحل خط‌لوله را سپری کند:
+            پیشنهادهای تنظیم از معاملات واقعی ساخته می‌شوند. تا وقتی پارامتر دقیق، بک‌تست و آزمون خارج‌نمونه ثبت نشده باشد، هیچ دکمه‌ای اجازه تغییر نسخه فعال را نمی‌دهد.
           </div>
 
           <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
             {researchProposals.map((prop) => {
-              const isLoading = actionLoadingId === prop.id;
               return (
                 <div key={prop.id} className="card" style={{ padding: "1.35rem", display: "flex", flexDirection: "column", gap: "0.9rem" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
@@ -446,7 +537,7 @@ export const TradingLabView: React.FC = () => {
                           {prop.strategy_name_fa}
                         </span>
                         <span style={{ fontSize: "0.8rem", color: "var(--tse-gold)", padding: "0.2rem 0.55rem", borderRadius: "4px", backgroundColor: "var(--tse-gold-subtle)" }}>
-                          Champion: {prop.champion_version} ➔ Challenger: {prop.challenger_version}
+                          نسخه فعلی: {prop.champion_version} ← نسخه آزمایشی: {prop.challenger_version}
                         </span>
                       </div>
                       <p style={{ fontSize: "0.85rem", color: "var(--text-secondary)", marginTop: "0.4rem", lineHeight: 1.5 }}>
@@ -471,58 +562,24 @@ export const TradingLabView: React.FC = () => {
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "0.8rem", fontSize: "0.82rem", backgroundColor: "rgba(255,255,255,0.02)", padding: "0.85rem", borderRadius: "6px" }}>
                     <div>
                       <div style={{ color: "var(--text-secondary)" }}>نرخ برد شبیه‌ساز تاریخی:</div>
-                      <strong style={{ color: "var(--tse-green)" }}>{formatPercentFa(prop.backtest_metrics?.historical_win_rate || 62.4, 1)}</strong>
+                      <strong style={{ color: "var(--tse-green)" }}>{prop.backtest_metrics?.historical_win_rate != null ? formatPercentFa(prop.backtest_metrics.historical_win_rate, 1) : "—"}</strong>
                     </div>
                     <div>
                       <div style={{ color: "var(--text-secondary)" }}>ضریب سود بک‌تست:</div>
-                      <strong style={{ color: "var(--tse-gold)" }}>{toPersianDigits(prop.backtest_metrics?.historical_profit_factor || "۱.۹۴")}x</strong>
+                      <strong style={{ color: "var(--tse-gold)" }}>{prop.backtest_metrics?.historical_profit_factor != null ? `${toPersianDigits(prop.backtest_metrics.historical_profit_factor)}x` : "—"}</strong>
                     </div>
                     <div>
                       <div style={{ color: "var(--text-secondary)" }}>امید ریاضی OOS:</div>
-                      <strong style={{ color: "var(--tse-blue)" }}>{formatRFa(prop.oos_metrics?.oos_expectancy_R || 0.39, 2)}</strong>
+                      <strong style={{ color: "var(--tse-blue)" }}>{prop.oos_metrics?.oos_expectancy_R != null ? formatRFa(prop.oos_metrics.oos_expectancy_R, 2) : "—"}</strong>
                     </div>
                     <div>
                       <div style={{ color: "var(--text-secondary)" }}>تعداد نمونه اعتبارسنجی:</div>
-                      <strong style={{ color: "#ffffff" }}>{toPersianDigits(prop.backtest_metrics?.sample_size || 84)} معامله</strong>
+                      <strong style={{ color: "#ffffff" }}>{prop.backtest_metrics?.sample_size != null ? `${toPersianDigits(prop.backtest_metrics.sample_size)} معامله` : "—"}</strong>
                     </div>
                   </div>
 
-                  <div style={{ display: "flex", gap: "0.6rem", borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: "0.85rem" }}>
-                    <button
-                      onClick={() => handleProposalAction(prop.id, "backtest")}
-                      disabled={isLoading}
-                      className="btn-secondary"
-                      style={{ padding: "0.45rem 0.85rem", fontSize: "0.8rem" }}
-                    >
-                      <Play size={14} /> ۱. اجرای بک‌تست تاریخی
-                    </button>
-
-                    <button
-                      onClick={() => handleProposalAction(prop.id, "oos_validate")}
-                      disabled={isLoading}
-                      className="btn-secondary"
-                      style={{ padding: "0.45rem 0.85rem", fontSize: "0.8rem" }}
-                    >
-                      <CheckCircle2 size={14} /> ۲. اعتبارسنجی OOS
-                    </button>
-
-                    <button
-                      onClick={() => handleProposalAction(prop.id, "paper_test")}
-                      disabled={isLoading}
-                      className="btn-secondary"
-                      style={{ padding: "0.45rem 0.85rem", fontSize: "0.8rem" }}
-                    >
-                      <RotateCw size={14} /> ۳. استقرار پیپر موازی
-                    </button>
-
-                    <button
-                      onClick={() => handleProposalAction(prop.id, "promote")}
-                      disabled={isLoading}
-                      className="btn-primary"
-                      style={{ padding: "0.45rem 0.85rem", fontSize: "0.8rem", marginRight: "auto" }}
-                    >
-                      <Award size={14} /> ارتقا به Champion پروداکشن
-                    </button>
+                  <div style={{ display: "flex", gap: "0.6rem", borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: "0.85rem", color: "var(--tse-gold)", fontSize: "0.78rem" }}>
+                    این پیشنهاد هنوز parameter_changes قابل اجرا و نتیجه آزمون ثبت‌شده ندارد؛ تغییر نسخه فعال مسدود است.
                   </div>
                 </div>
               );
@@ -531,47 +588,6 @@ export const TradingLabView: React.FC = () => {
         </div>
       )}
 
-      {/* SECTION 4: VALIDATION */}
-      {activeSubTab === "validation" && (
-        <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
-          <div className="card" style={{ padding: "1.5rem" }}>
-            <h3 style={{ fontSize: "1rem", fontWeight: 700, color: "var(--tse-gold)", marginBottom: "0.8rem" }}>
-              مقایسه رو‌در‌روی Champion در برابر Challenger
-            </h3>
-            <p style={{ fontSize: "0.85rem", color: "var(--text-secondary)", lineHeight: 1.6 }}>
-              در این بخش نتایج آزمون‌های مقایسه‌ای دو نسخه همزمان روی جریان زنده داده‌ها بدون دخالت در معاملات زنده پایش می‌شود.
-            </p>
-          </div>
-        </div>
-      )}
-
-      {/* SECTION 5: PAPER TRADING */}
-      {activeSubTab === "paper" && (
-        <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
-          <div className="card" style={{ padding: "1.5rem" }}>
-            <h3 style={{ fontSize: "1rem", fontWeight: 700, color: "var(--tse-blue)", marginBottom: "0.8rem" }}>
-              مدیریت پورتفوی آزمایشی (Paper Trading Portfolio)
-            </h3>
-            <p style={{ fontSize: "0.85rem", color: "var(--text-secondary)", lineHeight: 1.6 }}>
-              معاملات آزمایشی با سرمایه ۱ میلیارد تومان (۱۰ میلیارد ریال) به صورت بلادرنگ توسط هوش مصنوعی اجرا و در دفترکل ثبت می‌شوند.
-            </p>
-          </div>
-        </div>
-      )}
-
-      {/* SECTION 6: HISTORICAL BACKTEST */}
-      {activeSubTab === "backtest" && (
-        <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
-          <div className="card" style={{ padding: "1.5rem" }}>
-            <h3 style={{ fontSize: "1rem", fontWeight: 700, color: "var(--tse-green)", marginBottom: "0.8rem" }}>
-              شبیه‌ساز بک‌تست تاریخی و آزمون برون‌نمونه (Walk-Forward Backtest)
-            </h3>
-            <p style={{ fontSize: "0.85rem", color: "var(--text-secondary)", lineHeight: 1.6 }}>
-              آزمون جامع تمام استراتژی‌ها بر روی ۲۶۰ روز دیتای تاریخی بدون سوگیری نگاه به آینده (Look-ahead bias) و با احتساب صف‌ها و اسلیپیج واقعی بورس تهران.
-            </p>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

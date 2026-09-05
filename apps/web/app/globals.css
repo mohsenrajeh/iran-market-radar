@@ -3,6 +3,14 @@
    ========================================================================== */
 
 @font-face {
+  font-family: 'Vazirmatn Variable';
+  src: url('/fonts/Vazirmatn[wght].woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
   font-family: 'Vazirmatn';
   src: url('/fonts/Vazirmatn-Thin.woff2') format('woff2');
   font-weight: 100;
@@ -336,4 +344,87 @@ input, button, select, textarea, span, div, strong, a, p, h1, h2, h3, h4, h5, h6
   border-radius: var(--radius-sm);
   font-weight: 600;
   font-size: 0.8rem;
+}
+
+@media (max-width: 768px) {
+  .app-shell {
+    display: block !important;
+    min-width: 0 !important;
+  }
+
+  .app-sidebar {
+    width: 100% !important;
+    height: auto !important;
+    position: relative !important;
+    top: auto !important;
+    border-left: none !important;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .app-sidebar > div:first-child {
+    padding: 0.8rem 1rem !important;
+  }
+
+  .app-sidebar-nav {
+    flex: none !important;
+    flex-direction: row !important;
+    overflow-x: auto !important;
+    padding: 0.65rem !important;
+    scroll-snap-type: x proximity;
+  }
+
+  .app-sidebar-nav > button {
+    flex: 0 0 auto !important;
+    width: auto !important;
+    min-width: 155px;
+    scroll-snap-align: start;
+  }
+
+  .app-sidebar-footer {
+    display: none !important;
+  }
+
+  .app-main {
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  .app-header {
+    position: relative !important;
+    padding: 0.85rem !important;
+    align-items: stretch !important;
+  }
+
+  .app-header-title,
+  .app-header-status {
+    width: 100% !important;
+    gap: 0.65rem !important;
+  }
+
+  .app-header-title h1 {
+    font-size: 1rem !important;
+    line-height: 1.6;
+  }
+
+  .app-header-search {
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  .app-header-status > div {
+    max-width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .app-view {
+    padding: 0.85rem !important;
+    min-width: 0 !important;
+  }
+
+  .card,
+  .card-panel,
+  .kpi-card {
+    max-width: 100%;
+    min-width: 0;
+  }
 }

@@ -1,4 +1,5 @@
 """Paper Trading API routes, position management, pre-trade risk tickets, and ledger inspection."""
+import copy
 import math
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -17,6 +18,14 @@ from packages.domain.models import (
     TradeExecutionTimeline,
     TradeExitReason,
     TradeOutcomeStatus,
+    CashLedger,
+    PortfolioSnapshot,
+    MarketSnapshot,
+    BrokerOrder,
+    OrderFill,
+    DecisionAudit,
+    ClientTypeSnapshot,
+    PaperCampaign,
 )
 from packages.domain.schemas import (
     PortfolioResponse,
@@ -26,14 +35,53 @@ from packages.domain.schemas import (
 )
 from packages.domain.risk_policy import ACTIVE_RISK_POLICY
 from services.paper_broker.ledger import paper_broker
-from services.paper_broker.sizing import position_sizing_solver
 from services.paper_broker.accounting import accounting_reconciler
-from services.paper_broker.attribution import update_indicator_attribution
 from packages.shared.database import get_sync_db
-from packages.shared.datetime_utils import now_utc, to_jalali_str
+from packages.shared.config import settings
+from packages.shared.datetime_utils import now_utc, to_jalali_str, to_utc_iso
 from packages.shared.metrics import compute_r_multiples
+from services.collector.quality import evaluate_data_gate
+from services.collector.trusted_queries import latest_trusted_market_snapshot
+from packages.feature_engine.indicators import compute_symbol_features
+from packages.market_rules.trading_hours import is_tse_market_open
+from services.paper_broker.campaign import get_active_campaign_portfolio
 
 router = APIRouter(prefix="/paper", tags=["Paper Trading"])
+
+
+def _require_fresh_trade_data(db: Session) -> None:
+    gate = evaluate_data_gate(db, require_market_open=True)
+    if not gate.allowed:
+        raise HTTPException(status_code=409, detail={"message": "گیت داده اجازه معامله نمی‌دهد.", "trade_gate": gate.to_dict()})
+
+
+def _require_exit_session() -> None:
+    """Risk-reducing exits need an open session; per-symbol price trust is checked separately."""
+    if not is_tse_market_open():
+        raise HTTPException(status_code=409, detail="خروج کاغذی فقط در جلسه پیوسته بازار ثبت می‌شود.")
+
+
+def _require_fresh_instrument_snapshot(snapshot: MarketSnapshot | None) -> datetime:
+    """Reject a trade action unless this instrument's own snapshot is fresh."""
+    if snapshot is None:
+        raise HTTPException(status_code=409, detail="snapshot رسمی و تازه برای نماد موجود نیست.")
+    snapshot_as_of = snapshot.source_timestamp
+    if snapshot_as_of.tzinfo is None:
+        snapshot_as_of = snapshot_as_of.replace(tzinfo=timezone.utc)
+    age_seconds = (now_utc() - snapshot_as_of.astimezone(timezone.utc)).total_seconds()
+    if age_seconds < 0 or age_seconds > settings.quality.critical_market_stale_seconds:
+        raise HTTPException(status_code=409, detail="snapshot رسمی همین نماد قدیمی است؛ معامله متوقف شد.")
+    return snapshot_as_of
+
+
+def _fresh_trusted_instrument_snapshot(db: Session, instrument_id: str | None) -> MarketSnapshot:
+    snapshot = latest_trusted_market_snapshot(
+        db,
+        instrument_id or "",
+        max_age_seconds=settings.quality.critical_market_stale_seconds,
+    )
+    _require_fresh_instrument_snapshot(snapshot)
+    return snapshot
 
 
 class KillSwitchRequest(BaseModel):
@@ -49,83 +97,27 @@ class CustomRiskTicketRequest(BaseModel):
 
 @router.get("/portfolio", response_model=PortfolioResponse)
 def get_paper_portfolio(db: Session = Depends(get_sync_db)):
-    """Returns calibrated paper portfolio, live positions, P&L in Rials and Tomans, and risk stats."""
-    port = db.query(Portfolio).first()
+    """Return the persisted ledger state without creating, seeding, repricing, or committing."""
+    port = get_active_campaign_portfolio(db)
     if not port:
-        port = Portfolio(
-            id="port_default_paper",
-            name="پورتفوی آزمایشی پیش‌فرض (۱ میلیارد تومان)",
-            mode="paper",
-            cash=10_000_000_000.0,
-            initial_cash=10_000_000_000.0,
-            realized_pnl=42_500_000.0,
-        )
-        db.add(port)
-        db.commit()
-        db.refresh(port)
-
-    port.initial_cash = 10_000_000_000.0
+        raise HTTPException(status_code=404, detail="پورتفوی کاغذی هنوز در startup مقداردهی نشده است.")
+    campaign = (
+        db.query(PaperCampaign)
+        .filter(PaperCampaign.portfolio_id == port.id)
+        .order_by(PaperCampaign.created_at.desc())
+        .first()
+    )
     open_positions = [p for p in port.positions if p.is_open]
-
-    # Seed initial diversified positions if empty
-    if len(open_positions) == 0:
-        seed_data = [
-            {"symbol": "فولاد", "qty": 150_000, "price": 5240.0, "target": 5750.0, "stop": 4980.0, "regime": "risk_on"},
-            {"symbol": "فملی", "qty": 110_000, "price": 7080.0, "target": 7780.0, "stop": 6720.0, "regime": "risk_on"},
-            {"symbol": "نوری", "qty": 35_000, "price": 24350.0, "target": 26900.0, "stop": 23100.0, "regime": "risk_on"},
-            {"symbol": "وبملت", "qty": 350_000, "price": 2450.0, "target": 2720.0, "stop": 2320.0, "regime": "risk_on"},
-            {"symbol": "شپنا", "qty": 180_000, "price": 4600.0, "target": 5050.0, "stop": 4370.0, "regime": "risk_on"},
-            {"symbol": "کچاد", "qty": 180_000, "price": 4380.0, "target": 4800.0, "stop": 4150.0, "regime": "risk_on"},
-            {"symbol": "کگل", "qty": 130_000, "price": 6280.0, "target": 6900.0, "stop": 5960.0, "regime": "risk_on"},
-            {"symbol": "وغدیر", "qty": 45_000, "price": 18200.0, "target": 20100.0, "stop": 17250.0, "regime": "risk_on"},
-        ]
-        for s in seed_data:
-            new_pos = Position(
-                portfolio_id=port.id,
-                symbol=s["symbol"],
-                quantity=s["qty"],
-                average_entry_price=s["price"],
-                current_price=s["price"] * 1.025,
-                target_price=s["target"],
-                stop_loss=s["stop"],
-                market_regime=s["regime"],
-                is_open=True,
-                opened_at=now_utc(),
-            )
-            db.add(new_pos)
-        db.commit()
-        db.refresh(port)
-        open_positions = [p for p in port.positions if p.is_open]
-
-    total_positions_cost = sum(p.quantity * p.average_entry_price for p in open_positions)
-    port.cash = max(3_000_000_000.0, 10_000_000_000.0 - total_positions_cost)
-    db.commit()
-
-    unrealized_total = 0.0
-
-    for pos in open_positions:
-        sym = pos.symbol
-        inst = db.query(Instrument).filter(Instrument.ticker == sym).first()
-        base_price = pos.average_entry_price
-
-        if inst:
-            latest_bar = (
-                db.query(EODBar)
-                .filter(EODBar.instrument_id == inst.id)
-                .order_by(EODBar.trading_date.desc())
-                .first()
-            )
-            if latest_bar and latest_bar.close > 0:
-                base_price = latest_bar.close
-
-        pos.current_price = max(base_price, pos.current_price or base_price)
-        pos.unrealized_pnl = (pos.current_price - pos.average_entry_price) * pos.quantity
-        pos.total_invested_rials = pos.average_entry_price * pos.quantity
-        unrealized_total += pos.unrealized_pnl
-
-    db.commit()
-
-    total_positions_val = sum(p.quantity * p.current_price for p in open_positions)
+    display_prices: dict[str, float] = {}
+    for position in open_positions:
+        instrument = db.query(Instrument).filter(Instrument.ticker == position.symbol).first()
+        latest_market = (
+            db.query(MarketSnapshot).filter(MarketSnapshot.instrument_id == instrument.id)
+            .order_by(MarketSnapshot.source_timestamp.desc()).first()
+        ) if instrument else None
+        display_prices[position.id] = latest_market.last_price if latest_market else position.current_price
+    unrealized_total = sum((display_prices[p.id] - p.average_entry_price) * p.quantity for p in open_positions)
+    total_positions_val = sum(p.quantity * display_prices[p.id] for p in open_positions)
     total_equity = port.cash + total_positions_val
 
     pos_responses = []
@@ -136,70 +128,77 @@ def get_paper_portfolio(db: Session = Depends(get_sync_db)):
         "halted": "متوقف / بحرانی",
     }
 
-    # Central risk per trade from active policy based on regime
-    active_regime = "RISK_ON"
-    regime_risk_pct = ACTIVE_RISK_POLICY.regimes[active_regime].risk_per_trade_pct
-
     for p in open_positions:
+        display_price = display_prices[p.id]
         cost = p.quantity * p.average_entry_price
-        pnl_pct = ((p.current_price - p.average_entry_price) / max(1.0, p.average_entry_price)) * 100.0 if p.average_entry_price > 0 else 0.0
+        pnl_pct = ((display_price - p.average_entry_price) / max(1.0, p.average_entry_price)) * 100.0 if p.average_entry_price > 0 else 0.0
         invested_r = p.total_invested_rials or cost
         invested_t = invested_r / 10.0
 
         if p.opened_at:
             o_dt = p.opened_at if p.opened_at.tzinfo is not None else p.opened_at.replace(tzinfo=timezone.utc)
-            days_open_val = round(max(0.5, (now_utc() - o_dt).total_seconds() / 86400.0), 1)
+            days_open_val = round(max(0.0, (now_utc() - o_dt).total_seconds() / 86400.0), 1)
         else:
-            days_open_val = 1.0
+            days_open_val = 0.0
 
         # Dynamic R/R calculation derived at runtime from Entry, Target and Stop
-        tgt = p.target_price or p.average_entry_price * 1.085
-        stp = p.stop_loss or p.average_entry_price * 0.955
-        rew = max(1.0, tgt - p.average_entry_price)
-        rsk = max(1.0, p.average_entry_price - stp)
-        raw_rr = rew / rsk
-        net_rr = max(1.8, raw_rr - (0.012562 / max(0.01, (p.average_entry_price - stp) / p.average_entry_price)))
+        tgt = p.target_price
+        stp = p.stop_loss
+        if tgt is not None and stp is not None and p.average_entry_price > stp:
+            reward = max(0.0, tgt - p.average_entry_price)
+            risk = p.average_entry_price - stp
+            raw_rr = reward / risk
+            net_rr = max(0.0, raw_rr - (0.012562 / max(0.01, risk / p.average_entry_price)))
+            rr_display = f"1:{net_rr:.2f}"
+        else:
+            rr_display = "UNKNOWN"
 
-        dist_target = round(((tgt - p.current_price) / max(1.0, p.current_price)) * 100, 2)
-        dist_stop = round(((stp - p.current_price) / max(1.0, p.current_price)) * 100, 2)
-        m_regime = getattr(p, "market_regime", "risk_on") or "risk_on"
-
+        dist_target = round(((tgt - display_price) / max(1.0, display_price)) * 100, 2) if tgt is not None else 0.0
+        dist_stop = round(((stp - display_price) / max(1.0, display_price)) * 100, 2) if stp is not None else 0.0
+        m_regime = getattr(p, "market_regime", "unknown") or "unknown"
         pos_responses.append(
             PositionResponse(
                 id=p.id,
                 symbol=p.symbol,
                 quantity=p.quantity,
                 average_entry_price=round(p.average_entry_price),
-                current_price=round(p.current_price),
-                unrealized_pnl=round(p.unrealized_pnl),
+                current_price=round(display_price),
+                unrealized_pnl=round((display_price - p.average_entry_price) * p.quantity),
                 unrealized_pnl_pct=round(pnl_pct, 2),
-                stop_loss=round(stp),
-                target_price=round(tgt),
+                stop_loss=round(stp) if stp is not None else None,
+                target_price=round(tgt) if tgt is not None else None,
                 total_invested_rials=round(invested_r),
                 total_invested_tomans=round(invested_t),
-                risk_pct=regime_risk_pct,
-                risk_reward_ratio=f"1:{net_rr:.2f}",
-                expected_days_to_target=5,
+                risk_pct=p.risk_pct,
+                risk_reward_ratio=rr_display,
+                expected_days_to_target=p.expected_days_to_target,
                 days_open=days_open_val,
                 market_regime=m_regime,
-                market_regime_fa=regime_fa_map.get(m_regime.lower(), "رونق و تقاضای پرقدرت"),
-                decision_method=getattr(p, "decision_method", "") or "همگرایی ۵ استراتژی کمّی",
-                entry_reason_fa=getattr(p, "entry_reason_fa", "") or "تأیید همزمان سیگنال‌های مومنتوم و ورود جریان نقدینگی حقیقی",
+                market_regime_fa=regime_fa_map.get(m_regime.lower(), "نامشخص"),
+                decision_method=getattr(p, "decision_method", "") or "ثبت نشده",
+                entry_reason_fa=getattr(p, "entry_reason_fa", "") or "دلیل ورود در داده قدیمی ثبت نشده است",
                 distance_to_target_pct=dist_target,
                 distance_to_stop_pct=dist_stop,
-                client_power_ratio=1.45,
-                risk_flags_fa=getattr(p, "risk_flags_fa", []) or ["بدون ریسک صف فروش", "حجم معاملات بالاتر از میانگین ماهانه"],
+                client_power_ratio=getattr(p, "client_power_ratio", None),
+                risk_flags_fa=getattr(p, "risk_flags_fa", []) or [],
                 opened_at=p.opened_at,
                 is_open=p.is_open,
             )
         )
 
-    snap_id = f"SNAP-TSE-{now_utc().strftime('%Y%m%d')}-01"
+    latest_snapshot = db.query(PortfolioSnapshot).filter(PortfolioSnapshot.portfolio_id == port.id).order_by(PortfolioSnapshot.snapshot_at.desc()).first()
+    snap_id = latest_snapshot.id if latest_snapshot else "NO_SNAPSHOT"
+    ledger_sequence = db.query(CashLedger).filter(CashLedger.portfolio_id == port.id).count()
     as_of_jalali = to_jalali_str(now_utc(), include_time=True)
 
     return PortfolioResponse(
         id=port.id,
         name=port.name,
+        campaign_id=campaign.id if campaign else None,
+        campaign_status=campaign.status if campaign else None,
+        campaign_started_at=campaign.starts_at if campaign else None,
+        campaign_ends_at=campaign.ends_at if campaign else None,
+        initial_cash=round(port.initial_cash),
         cash=round(port.cash),
         total_equity=round(total_equity),
         realized_pnl=round(port.realized_pnl),
@@ -207,7 +206,7 @@ def get_paper_portfolio(db: Session = Depends(get_sync_db)):
         open_positions_count=len(open_positions),
         kill_switch_active=port.kill_switch_active,
         portfolio_snapshot_id=snap_id,
-        ledger_sequence=142,
+        ledger_sequence=ledger_sequence,
         risk_policy_version=ACTIVE_RISK_POLICY.version,
         as_of=as_of_jalali,
         positions=pos_responses,
@@ -217,7 +216,7 @@ def get_paper_portfolio(db: Session = Depends(get_sync_db)):
 @router.get("/pre-trade-ticket/{signal_id}")
 def get_pre_trade_risk_ticket(signal_id: str, db: Session = Depends(get_sync_db)):
     """Generates complete pre-trade risk ticket with position sizing analysis and stage breakdown."""
-    port = db.query(Portfolio).first()
+    port = get_active_campaign_portfolio(db)
     if not port:
         raise HTTPException(status_code=404, detail="پورتفوی یافت نشد.")
 
@@ -227,13 +226,14 @@ def get_pre_trade_risk_ticket(signal_id: str, db: Session = Depends(get_sync_db)
 
     inst = db.query(Instrument).filter(Instrument.id == sig.instrument_id).first()
     curr_bar = (
-        db.query(EODBar)
-        .filter(EODBar.instrument_id == inst.id)
-        .order_by(EODBar.trading_date.desc())
+        db.query(MarketSnapshot)
+        .filter(MarketSnapshot.instrument_id == inst.id)
+        .order_by(MarketSnapshot.source_timestamp.desc())
         .first()
     ) if inst else None
-
-    curr_price = curr_bar.close if curr_bar else sig.entry_zone.get("high", 1000.0)
+    if curr_bar is None:
+        raise HTTPException(status_code=409, detail="snapshot رسمی برای محاسبه ریسک موجود نیست.")
+    curr_price = curr_bar.last_price
     ticket = paper_broker.generate_pre_trade_ticket(port, sig, curr_price)
     return ticket
 
@@ -241,7 +241,7 @@ def get_pre_trade_risk_ticket(signal_id: str, db: Session = Depends(get_sync_db)
 @router.post("/evaluate-risk-ticket")
 def evaluate_custom_risk_ticket(req: CustomRiskTicketRequest, db: Session = Depends(get_sync_db)):
     """Evaluates custom price and stop levels against portfolio constraints."""
-    port = db.query(Portfolio).first()
+    port = get_active_campaign_portfolio(db)
     if not port:
         raise HTTPException(status_code=404, detail="پورتفوی یافت نشد.")
 
@@ -249,8 +249,26 @@ def evaluate_custom_risk_ticket(req: CustomRiskTicketRequest, db: Session = Depe
     if not sig:
         raise HTTPException(status_code=404, detail="سیگنال یافت نشد.")
 
-    curr_price = req.custom_price or (sig.entry_zone.get("low", 1000.0) if sig.entry_zone else 1000.0)
-    ticket = paper_broker.generate_pre_trade_ticket(port, sig, curr_price)
+    if req.custom_price is not None:
+        curr_price = req.custom_price
+    else:
+        inst = db.query(Instrument).filter(Instrument.id == sig.instrument_id).first()
+        snapshot = (
+            db.query(MarketSnapshot).filter(MarketSnapshot.instrument_id == inst.id)
+            .order_by(MarketSnapshot.source_timestamp.desc()).first()
+        ) if inst else None
+        if snapshot is None:
+            raise HTTPException(status_code=409, detail="snapshot رسمی برای محاسبه ریسک موجود نیست.")
+        curr_price = snapshot.last_price
+    evaluated_signal = copy.copy(sig)
+    evaluated_signal.invalidation = dict(sig.invalidation or {})
+    evaluated_signal.exit_plan = dict(sig.exit_plan or {})
+    if req.custom_stop is not None:
+        evaluated_signal.invalidation["price"] = req.custom_stop
+    if req.custom_target is not None:
+        targets = list(evaluated_signal.exit_plan.get("targets") or [])
+        evaluated_signal.exit_plan["targets"] = [req.custom_target, *targets[1:]]
+    ticket = paper_broker.generate_pre_trade_ticket(port, evaluated_signal, curr_price)
     return ticket
 
 
@@ -263,34 +281,55 @@ def get_paper_position_detail(position_id: str, db: Session = Depends(get_sync_d
 
     sym = pos.symbol
     inst = db.query(Instrument).options(joinedload(Instrument.sector)).filter(Instrument.ticker == sym).first()
-    sec_name = inst.sector.name_fa if inst and inst.sector else "فلزات اساسی"
+    sec_name = inst.sector.name_fa if inst and inst.sector else "نامشخص"
     name_fa = inst.name_fa if inst else sym
+    latest_market = (
+        db.query(MarketSnapshot).filter(MarketSnapshot.instrument_id == inst.id)
+        .order_by(MarketSnapshot.source_timestamp.desc()).first()
+    ) if inst else None
+    cur_price = latest_market.last_price if latest_market else (pos.current_price or pos.average_entry_price)
+    stop_loss = pos.stop_loss
+    target_1 = pos.target_price
+    entry_order = db.query(BrokerOrder).filter(
+        BrokerOrder.portfolio_id == pos.portfolio_id,
+        BrokerOrder.symbol == pos.symbol,
+        BrokerOrder.side == "BUY",
+        BrokerOrder.signal_id.isnot(None),
+        ~BrokerOrder.signal_id.like("position:%"),
+    ).order_by(BrokerOrder.created_at.asc()).first()
+    signal = db.query(PublishedSignal).filter(PublishedSignal.id == entry_order.signal_id).first() if entry_order else None
+    signal_targets = (signal.exit_plan or {}).get("targets", []) if signal else []
+    target_2 = signal_targets[1] if len(signal_targets) > 1 else None
 
-    cur_price = pos.current_price or pos.average_entry_price
-    stop_loss = pos.stop_loss or round(pos.average_entry_price * 0.945)
-    target_1 = pos.target_price or round(pos.average_entry_price * 1.085)
-    target_2 = round(pos.average_entry_price * 1.145)
+    r_metrics = None
+    if stop_loss is not None and target_1 is not None and stop_loss < pos.average_entry_price:
+        r_metrics = compute_r_multiples(
+            current_price=cur_price,
+            planned_entry=pos.average_entry_price,
+            stop_price=stop_loss,
+            target1_price=target_1,
+            target2_price=target_2 or target_1,
+        )
 
-    r_metrics = compute_r_multiples(
-        current_price=cur_price,
-        planned_entry=pos.average_entry_price,
-        stop_price=stop_loss,
-        target1_price=target_1,
-        target2_price=target_2,
-    )
+    if target_1 is not None and target_1 > pos.average_entry_price:
+        target_gain_range = target_1 - pos.average_entry_price
+        progress_to_target = round(((cur_price - pos.average_entry_price) / target_gain_range) * 100, 1)
+        dist_target_pct = round(((target_1 - cur_price) / max(1.0, cur_price)) * 100, 2)
+        dist_target_rials = round(target_1 - cur_price)
+    else:
+        progress_to_target = None
+        dist_target_pct = None
+        dist_target_rials = None
+    if stop_loss is not None:
+        dist_stop_pct = round(((stop_loss - cur_price) / max(1.0, cur_price)) * 100, 2)
+        dist_stop_rials = round(stop_loss - cur_price)
+    else:
+        dist_stop_pct = None
+        dist_stop_rials = None
 
-    # Progress to Target 1 calculation
-    target_gain_range = max(1.0, target_1 - pos.average_entry_price)
-    current_gain = cur_price - pos.average_entry_price
-    progress_to_target = round((current_gain / target_gain_range) * 100, 1)
-
-    dist_target_pct = round(((target_1 - cur_price) / max(1.0, cur_price)) * 100, 2)
-    dist_target_rials = round(target_1 - cur_price)
-    dist_stop_pct = round(((stop_loss - cur_price) / max(1.0, cur_price)) * 100, 2)
-    dist_stop_rials = round(stop_loss - cur_price)
-
-    # Fetch last 15 bars for candle chart
+    # Fetch only persisted bars; an empty chart is more honest than fabricated candles.
     bars_query = []
+    bars = []
     if inst:
         bars = (
             db.query(EODBar)
@@ -309,22 +348,38 @@ def get_paper_position_detail(position_id: str, db: Session = Depends(get_sync_d
                 "volume": b.volume,
             })
 
-    if len(bars_query) < 5:
-        base = pos.average_entry_price * 0.97
-        for i in range(12):
-            step = (cur_price - base) * (i / 11.0)
-            c_close = round(base + step)
-            bars_query.append({
-                "date": f"۱۴۰۵/۰۵/{10 + i}",
-                "open": round(c_close * 0.995),
-                "high": round(c_close * 1.015),
-                "low": round(c_close * 0.99),
-                "close": c_close,
-                "volume": round(15_000_000 + i * 2_000_000),
-            })
-
     pnl_pct = ((cur_price - pos.average_entry_price) / max(1.0, pos.average_entry_price)) * 100.0
     cost = pos.quantity * pos.average_entry_price
+    opened = pos.opened_at or now_utc()
+    opened_aware = opened if opened.tzinfo is not None else opened.replace(tzinfo=timezone.utc)
+    days_open = max(0.0, (now_utc() - opened_aware).total_seconds() / 86400.0)
+    regime_fa = {
+        "risk_on": "رونق و تقاضای پرقدرت",
+        "neutral": "متعادل و نوسانی",
+        "risk_off": "ریسک‌گریز",
+        "halted": "متوقف",
+    }.get((pos.market_regime or "neutral").lower(), "نامشخص")
+
+    features: dict = {}
+    if len(bars) >= 15:
+        bars_dict = [{
+            "trading_date": bar.trading_date.isoformat(), "open": bar.open, "high": bar.high,
+            "low": bar.low, "close": bar.close, "last": bar.last,
+            "yesterday_price": bar.yesterday_price, "volume": bar.volume,
+            "value": bar.value, "trade_count": bar.trade_count,
+            "allowed_min": bar.allowed_min, "allowed_max": bar.allowed_max,
+        } for bar in reversed(bars)]
+        client_rows = db.query(ClientTypeSnapshot).filter(
+            ClientTypeSnapshot.instrument_id == inst.id
+        ).order_by(ClientTypeSnapshot.trading_date.desc()).limit(30).all() if inst else []
+        client_dict = [{
+            "trading_date": row.trading_date.isoformat(),
+            "real_buy_count": row.real_buy_count, "real_buy_volume": row.real_buy_volume,
+            "real_buy_value": row.real_buy_value, "real_sell_count": row.real_sell_count,
+            "real_sell_volume": row.real_sell_volume, "real_sell_value": row.real_sell_value,
+            "legal_buy_value": row.legal_buy_value, "legal_sell_value": row.legal_sell_value,
+        } for row in reversed(client_rows)]
+        features = compute_symbol_features(bars_dict, client_dict)
 
     pos_resp = PositionResponse(
         id=pos.id,
@@ -334,52 +389,50 @@ def get_paper_position_detail(position_id: str, db: Session = Depends(get_sync_d
         current_price=round(cur_price),
         unrealized_pnl=round((cur_price - pos.average_entry_price) * pos.quantity),
         unrealized_pnl_pct=round(pnl_pct, 2),
-        stop_loss=round(stop_loss),
-        target_price=round(target_1),
+        stop_loss=round(stop_loss) if stop_loss is not None else None,
+        target_price=round(target_1) if target_1 is not None else None,
         total_invested_rials=round(cost),
         total_invested_tomans=round(cost / 10.0),
-        risk_pct=ACTIVE_RISK_POLICY.regimes["RISK_ON"].risk_per_trade_pct,
-        risk_reward_ratio=f"1:{r_metrics['net_reward_risk_ratio']:.1f}",
-        expected_days_to_target=5,
-        days_open=1.5,
-        market_regime="risk_on",
-        market_regime_fa="رونق و تقاضای پرقدرت",
-        decision_method="همگرایی ۵ استراتژی کمّی",
-        entry_reason_fa=pos.entry_reason_fa or "ورود بر اساس سیگنال چندعاملی و ورود پول هوشمند",
+        risk_pct=pos.risk_pct,
+        risk_reward_ratio=f"1:{r_metrics['net_reward_risk_ratio']:.1f}" if r_metrics else "UNKNOWN",
+        expected_days_to_target=pos.expected_days_to_target,
+        days_open=round(days_open, 1),
+        market_regime=pos.market_regime or "unknown",
+        market_regime_fa=regime_fa,
+        decision_method=pos.decision_method or "ثبت نشده",
+        entry_reason_fa=pos.entry_reason_fa or "در داده قدیمی ثبت نشده است",
         distance_to_target_pct=dist_target_pct,
         distance_to_stop_pct=dist_stop_pct,
-        client_power_ratio=1.45,
-        risk_flags_fa=["بدون ریسک صف فروش", "حجم معاملات بالاتر از میانگین ماهانه"],
-        opened_at=pos.opened_at or now_utc(),
+        client_power_ratio=features.get("real_buyer_power") if features.get("real_buyer_power") is not None else pos.client_power_ratio,
+        risk_flags_fa=pos.risk_flags_fa or [],
+        opened_at=opened,
         is_open=pos.is_open,
     )
 
-    strategy_votes = [
-        {"strategy": "ichimoku_cloud_trend", "strategy_fa": "ایچیموکو — روند ابری", "vote": 0.85, "reason_fa": "کندل بالای ابر کومو با تنکان سن صعودی بالای کیجون سن"},
-        {"strategy": "smart_money_divergence", "strategy_fa": "واگرایی پول هوشمند", "vote": 0.92, "reason_fa": "قدرت خریدار حقیقی ۱.۴۵ برابر با رشد شیب OBV"},
-        {"strategy": "supertrend_breakout", "strategy_fa": "سوپرترند و میانگین متحرک", "vote": 0.78, "reason_fa": "سیگنال خرید سوپرترند با حمایت EMA 20"},
-        {"strategy": "multi_indicator_confluence", "strategy_fa": "تأیید چندگانه اندیکاتوری", "vote": 0.88, "reason_fa": "تطابق همزمان RSI(58) و MFI(64) و MACD هیستوگرام مثبت"},
-    ]
-
+    strategy_votes = signal.strategy_votes if signal else []
     active_indicators = {
-        "rsi_14": 58.4,
-        "mfi_14": 64.2,
-        "adx_14": 31.5,
-        "supertrend_direction": "صعودی (سبز)",
-        "ichimoku_status": "بالای ابر کومو (صعودی)",
-        "real_buyer_power": 1.45,
-        "volume_z_score": 2.15,
+        key: features[key]
+        for key in ("rsi_14", "mfi_14", "adx_14", "real_buyer_power", "volume_z_score")
+        if key in features
     }
 
     if pnl_pct >= 4.0:
-        recommendation = "سیو سود پله‌ای (توصیه به انتقال حد ضرر به قیمت ورود — ریسک‌فری)"
-        summary_fa = f"موقعیت با سود {pnl_pct:.1f}+٪ در حال حرکت به سمت تارگت است. پیشنهاد می‌شود ۵۰٪ پوزیشن در تارگت اول نقد و حد ضرر مابقی به قیمت ورود منتقل شود."
+        recommendation = "بررسی شرط خروج ثبت‌شده و مدیریت پله‌ای"
+        summary_fa = f"بازده ثبت‌شده {pnl_pct:+.1f}٪ است؛ تصمیم فقط با گیت داده و سفارش snapshot بعدی اجرا می‌شود."
     elif pnl_pct > 0:
-        recommendation = "حفظ موقعیت معاملاتی (در مسیر دستیابی به هدف سود اول)"
-        summary_fa = f"موقعیت در سود {pnl_pct:.1f}+٪ قرار دارد. جریان پول هوشمند فعال و مومنتوم صعودی پایدار است. فاصله تا تارگت اول {dist_target_pct:.1f}٪ می‌باشد."
+        recommendation = "حفظ یا خروج فقط طبق قواعد ثبت‌شده"
+        summary_fa = (
+            f"بازده ثبت‌شده {pnl_pct:+.1f}٪ و فاصله تا هدف ثبت‌شده {dist_target_pct:+.1f}٪ است."
+            if dist_target_pct is not None else
+            f"بازده ثبت‌شده {pnl_pct:+.1f}٪ است؛ هدف معتبر ثبت نشده است."
+        )
     else:
-        recommendation = "رصد دقیق حد ضرر (موقعیت فعال در محدوده مجاز)"
-        summary_fa = f"موقعیت با نوسان جزئی در حال تشکیل کف حمایتی است. حد ضرر فعال در {stop_loss:,.0f} ریال با فاصله {abs(dist_stop_pct):.1f}٪ قرار دارد."
+        recommendation = "رصد حد ضرر ثبت‌شده"
+        summary_fa = (
+            f"بازده ثبت‌شده {pnl_pct:+.1f}٪ و فاصله تا حد ضرر {dist_stop_pct:+.1f}٪ است؛ ادعای روند بدون داده کافی ساخته نمی‌شود."
+            if dist_stop_pct is not None else
+            f"بازده ثبت‌شده {pnl_pct:+.1f}٪ است؛ حد ضرر معتبر ثبت نشده و معامله باید برای بازبینی مسدود شود."
+        )
 
     return PositionDetailResponse(
         position=pos_resp,
@@ -399,181 +452,68 @@ def get_paper_position_detail(position_id: str, db: Session = Depends(get_sync_d
 
 @router.post("/close-position/{position_id}")
 def close_paper_position_manually(position_id: str, db: Session = Depends(get_sync_db)):
-    """Manually closes an open paper position at current market price, realizes P&L and credits cash."""
-    pos = db.query(Position).filter(Position.id == position_id).first()
+    """Submit a full exit for execution on the first later official snapshot."""
+    _require_exit_session()
+    port = get_active_campaign_portfolio(db)
+    if not port:
+        raise HTTPException(status_code=404, detail="پورتفوی فعال یافت نشد.")
+    pos = db.query(Position).filter(
+        Position.id == position_id,
+        Position.portfolio_id == port.id,
+        Position.is_open == True,
+    ).first()
     if not pos or not pos.is_open:
         raise HTTPException(status_code=404, detail="موقعیت باز فعالی با این شناسه یافت نشد.")
-
-    port = db.query(Portfolio).filter(Portfolio.id == pos.portfolio_id).first()
-    if not port:
-        raise HTTPException(status_code=404, detail="پورتفوی مرتبط یافت نشد.")
-
-    exit_price = pos.current_price
-    buy_val = pos.average_entry_price * pos.quantity
-    sell_val = exit_price * pos.quantity
-    entry_fee = buy_val * 0.003712
-    exit_fee = sell_val * 0.003850
-    tax_val = sell_val * 0.005000
-    total_costs = entry_fee + exit_fee + tax_val
-    net_pnl = gross_pnl - total_costs
-    return_pct = (net_pnl / buy_val) * 100.0 if buy_val > 0 else 0.0
-
-    cash_returned = sell_val - (exit_fee + tax_val)
-    port.cash += cash_returned
-    port.realized_pnl += net_pnl
-
-    pos.is_open = False
-    pos.unrealized_pnl = 0.0
-
-    # 1. Backward-compatible PaperTradeLog
-    trade_log = PaperTradeLog(
-        portfolio_id=port.id,
-        symbol=pos.symbol,
-        side="BUY",
-        entry_price=pos.average_entry_price,
-        exit_price=exit_price,
-        quantity=pos.quantity,
-        entry_at=pos.opened_at or now_utc(),
-        exit_at=now_utc(),
-        holding_hours=24.0,
-        gross_pnl=gross_pnl,
-        net_pnl=net_pnl,
-        return_pct=round(return_pct, 2),
-        exit_reason="MANUAL_EXIT",
-        reason_fa=pos.entry_reason_fa or "خروج دستی توسط معامله‌گر",
-        lesson_fa=f"معامله با بازده {return_pct:+.2f}٪ به صورت دستی بسته شد.",
-        is_closed=True,
-    )
-    db.add(trade_log)
-
-    # 2. Immutable ClosedTradeHistory record
-    r_unit = max(1.0, pos.average_entry_price - (pos.stop_loss or pos.average_entry_price * 0.95))
-    realized_r = round((exit_price - pos.average_entry_price) / r_unit, 2)
     inst = db.query(Instrument).filter(Instrument.ticker == pos.symbol).first()
-    sec_name = inst.sector.name_fa if inst and inst.sector else "عمومی"
-    comp_name = inst.name_fa if inst else pos.symbol
-
-    closed_trade = ClosedTradeHistory(
-        portfolio_id=port.id,
-        position_id=pos.id,
-        instrument_id=inst.id if inst else None,
-        symbol=pos.symbol,
-        company_name=comp_name,
-        sector=sec_name,
-        strategy_id=pos.decision_method or "s01_momentum",
-        strategy_name_fa=pos.entry_reason_fa or "مومنتوم مقطعی",
-        strategy_version="v1.0",
-        model_version="v2.4-isotonic-brier",
-        risk_policy_version="POL-TSE-2026-V2.5",
-        market_rules_version="TSE-RULES-2026-V1.0",
-        dataset_version="tse-pit-2026-08",
-        decision_method="Manual Trade Exit",
-        opened_at=pos.opened_at or now_utc(),
-        closed_at=now_utc(),
-        holding_sessions=max(1, int((now_utc() - (pos.opened_at or now_utc())).days or 1)),
-        holding_duration_hours=24.0,
-        planned_entry=pos.average_entry_price,
-        avg_entry_price=pos.average_entry_price,
-        avg_exit_price=exit_price,
-        total_quantity=pos.quantity,
-        gross_buy_value=buy_val,
-        gross_sell_value=sell_val,
-        entry_fees=entry_fee,
-        exit_fees=exit_fee,
-        tax=tax_val,
-        slippage_cost=0.0,
-        total_cost=total_costs,
-        gross_pnl=gross_pnl,
-        net_pnl=net_pnl,
-        net_return_pct=round(return_pct, 2),
-        initial_risk_amount=buy_val * 0.04,
-        initial_risk_pct_nav=0.35,
-        realized_R=round(realized_r, 2),
-        MFE=round(max(0.0, ((exit_price - pos.average_entry_price) / pos.average_entry_price) * 100.0) + 1.2, 1),
-        MAE=1.0,
-        initial_stop=pos.stop_loss or (pos.average_entry_price * 0.95),
-        final_stop=pos.stop_loss or (pos.average_entry_price * 0.95),
-        target1=pos.target_price or (pos.average_entry_price * 1.08),
-        target2=(pos.target_price or pos.average_entry_price) * 1.05,
-        exit_reason="MANUAL_EXIT",
-        exit_reason_detail="خروج دستی توسط معامله‌گر",
-        market_regime_at_entry=pos.market_regime or "risk_on",
-        market_regime_at_exit=pos.market_regime or "risk_on",
-        portfolio_nav_at_entry=port.cash + buy_val,
-        portfolio_nav_at_exit=port.cash,
-        position_weight_at_entry=round(buy_val / max(port.cash, 1.0), 3),
-        outcome_status="WIN" if net_pnl > 0 else ("LOSS" if net_pnl < -100_000 else "BREAKEVEN"),
-        reason_fa=pos.entry_reason_fa or "خروج دستی توسط معامله‌گر",
-        lesson_fa=f"معامله با بازده خالص {return_pct:+.2f}٪ ({realized_r:+.2f}R) بسته شد.",
-    )
-    db.add(closed_trade)
-    db.flush()
-
-    # 3. Execution Timeline Events
-    t_entry = TradeExecutionTimeline(
-        trade_id=closed_trade.id,
-        event_type="ENTRY_FILL",
-        timestamp=pos.opened_at or now_utc(),
-        price=pos.average_entry_price,
-        quantity=pos.quantity,
-        portion_pct=100.0,
-        fees=entry_fee,
-        notes_fa="ورود اولیه به معامله",
-    )
-    t_exit = TradeExecutionTimeline(
-        trade_id=closed_trade.id,
-        event_type="FINAL_EXIT_FILL",
-        timestamp=now_utc(),
-        price=exit_price,
-        quantity=pos.quantity,
-        portion_pct=100.0,
-        fees=exit_fee + tax_val,
-        notes_fa="خروج دستی معامله‌گر",
-    )
-    db.add_all([t_entry, t_exit])
-    db.flush()
-
-    # 4. Generate automated post-mortem
-    from services.paper_broker.learning_engine import learning_engine
-    learning_engine.generate_post_mortem(db, closed_trade)
-
-    try:
-        update_indicator_attribution(db, trade_log)
-    except Exception:
-        pass
-
+    snapshot = _fresh_trusted_instrument_snapshot(db, inst.id if inst else None)
+    order, message = paper_broker.create_exit_order(port, position_id, snapshot.last_price, ratio=1.0)
+    if order is None:
+        raise HTTPException(status_code=400, detail=message)
+    db.add_all([
+        order,
+        DecisionAudit(
+            symbol=pos.symbol, signal_id=None, decision="MANUAL_EXIT_SUBMITTED",
+            model_version="UNFITTED",
+            dataset_version=f"market_snapshot:{to_utc_iso(snapshot.source_timestamp)}",
+            risk_policy_version=paper_broker.policy.policy_id,
+            decision_reason_fa=f"درخواست خروج کامل ثبت شد؛ اجرا فقط روی snapshot رسمی بعدی؛ order={order.id}",
+            opportunity_score=0.0, p_profit=0.0, as_of=now_utc(),
+        ),
+    ])
     db.commit()
-
-    return {
-        "success": True,
-        "message": f"موقعیت نماد {pos.symbol} با سود/زیان {net_pnl / 10:,.0f} تومان ({return_pct:+.2f}٪) با موفقیت بسته شد و به تاریخچه معاملات انتقال یافت.",
-        "realized_pnl_tomans": round(net_pnl / 10.0),
-        "return_pct": round(return_pct, 2),
-        "new_cash_tomans": round(port.cash / 10.0),
-    }
+    return {"success": True, "message": message, "order_id": order.id, "status": order.status}
 
 
 
 @router.post("/orders/from-signal")
 def submit_paper_order_from_signal(req: OrderCreateFromSignalRequest, db: Session = Depends(get_sync_db)):
     """Creates and fills a new paper position from an approved opportunity."""
-    port = db.query(Portfolio).first()
+    _require_fresh_trade_data(db)
+    try:
+        port = get_active_campaign_portfolio(db, require_execution_window=True)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if not port:
         raise HTTPException(status_code=404, detail="پورتفوی آزمایشی یافت نشد.")
 
     sig = db.query(PublishedSignal).filter(PublishedSignal.id == req.signal_id).first()
     if not sig:
         raise HTTPException(status_code=404, detail="سیگنال مورد نظر یافت نشد.")
+    if not sig.actionable or sig.expires_at is None:
+        raise HTTPException(status_code=409, detail="سیگنال قابل اقدام و دارای انقضای معتبر نیست.")
+    signal_expiry = sig.expires_at if sig.expires_at.tzinfo else sig.expires_at.replace(tzinfo=timezone.utc)
+    if signal_expiry <= now_utc():
+        raise HTTPException(status_code=409, detail="اعتبار سیگنال منقضی شده است.")
 
     inst = db.query(Instrument).filter(Instrument.id == sig.instrument_id).first()
-    curr_bar = (
-        db.query(EODBar)
-        .filter(EODBar.instrument_id == inst.id)
-        .order_by(EODBar.trading_date.desc())
-        .first()
-    ) if inst else None
-
-    curr_price = curr_bar.close if curr_bar else sig.entry_zone.get("high", 1000.0)
+    curr_snapshot = _fresh_trusted_instrument_snapshot(db, inst.id if inst else None)
+    snapshot_as_of = curr_snapshot.source_timestamp
+    if snapshot_as_of.tzinfo is None:
+        snapshot_as_of = snapshot_as_of.replace(tzinfo=timezone.utc)
+    signal_as_of = sig.as_of if sig.as_of.tzinfo else sig.as_of.replace(tzinfo=timezone.utc)
+    if signal_as_of < snapshot_as_of or signal_as_of > now_utc():
+        raise HTTPException(status_code=409, detail="سیگنال به snapshot رسمی جاری تعلق ندارد؛ اسکن دوباره لازم است.")
+    curr_price = curr_snapshot.last_price
 
     order, message = paper_broker.create_order_from_signal(
         portfolio=port,
@@ -586,6 +526,18 @@ def submit_paper_order_from_signal(req: OrderCreateFromSignalRequest, db: Sessio
         raise HTTPException(status_code=400, detail=message)
 
     db.add(order)
+    db.add(DecisionAudit(
+        symbol=sig.symbol,
+        signal_id=sig.id,
+        model_version=sig.model_version or sig.calibration_version or "UNFITTED",
+        dataset_version=f"market_snapshot:{to_utc_iso(curr_snapshot.source_timestamp)}",
+        risk_policy_version=paper_broker.policy.policy_id,
+        decision="APPROVED_SUBMITTED",
+        decision_reason_fa="سفارش تأیید شد و برای اجرای snapshot بعدی در صف قرار گرفت.",
+        opportunity_score=sig.opportunity_score,
+        p_profit=sig.p_profit,
+        as_of=now_utc(),
+    ))
     db.commit()
 
     return {"success": True, "message": message, "order_id": order.id}
@@ -594,28 +546,48 @@ def submit_paper_order_from_signal(req: OrderCreateFromSignalRequest, db: Sessio
 @router.post("/scale-in/{position_id}")
 def scale_in_position_endpoint(position_id: str, db: Session = Depends(get_sync_db)):
     """افزایش پله‌ای حجم سهم برنده بر اساس ارتقای تحلیل و رعایت سقف ۱۰٪ مدیریت سرمایه."""
-    port = db.query(Portfolio).first()
+    _require_fresh_trade_data(db)
+    try:
+        port = get_active_campaign_portfolio(db, require_execution_window=True)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if not port:
         raise HTTPException(status_code=404, detail="پورتفوی یافت نشد.")
 
-    pos = db.query(Position).filter(Position.id == position_id, Position.is_open == True).first()
+    pos = db.query(Position).filter(
+        Position.id == position_id,
+        Position.portfolio_id == port.id,
+        Position.is_open == True,
+    ).first()
     if not pos:
         raise HTTPException(status_code=404, detail="موقعیت باز فعالی یافت نشد.")
 
-    curr_price = pos.current_price
+    inst = db.query(Instrument).filter(Instrument.ticker == pos.symbol).first()
+    snapshot = _fresh_trusted_instrument_snapshot(db, inst.id if inst else None)
+    curr_price = snapshot.last_price
     order, message = paper_broker.scale_in_position(port, position_id, curr_price)
     if not order:
         raise HTTPException(status_code=400, detail=message)
 
-    db.add(order)
+    db.add_all([
+        order,
+        DecisionAudit(
+            symbol=pos.symbol, signal_id=None, decision="SCALE_IN_SUBMITTED",
+            model_version="UNFITTED",
+            dataset_version=f"market_snapshot:{to_utc_iso(snapshot.source_timestamp)}",
+            risk_policy_version=paper_broker.policy.policy_id,
+            decision_reason_fa=f"افزایش حجم ثبت شد؛ اجرا فقط روی snapshot رسمی بعدی؛ order={order.id}",
+            opportunity_score=0.0, p_profit=0.0, as_of=now_utc(),
+        ),
+    ])
     db.commit()
 
     return {
         "success": True,
         "message": message,
-        "new_quantity": pos.quantity,
-        "new_avg_entry": round(pos.average_entry_price),
-        "total_invested_tomans": round((pos.quantity * pos.average_entry_price) / 10.0),
+        "order_id": order.id,
+        "status": order.status,
+        "current_quantity_unchanged": pos.quantity,
     }
 
 
@@ -626,32 +598,50 @@ def trim_position_endpoint(
     db: Session = Depends(get_sync_db),
 ):
     """کاهش پله‌ای ۲۵٪ یا ۵۰٪ حجم سهم جهت سیو سود یا کاهش ریسک در صورت تضعیف تحلیل."""
-    port = db.query(Portfolio).first()
+    _require_exit_session()
+    port = get_active_campaign_portfolio(db)
     if not port:
         raise HTTPException(status_code=404, detail="پورتفوی یافت نشد.")
 
-    pos = db.query(Position).filter(Position.id == position_id, Position.is_open == True).first()
+    pos = db.query(Position).filter(
+        Position.id == position_id,
+        Position.portfolio_id == port.id,
+        Position.is_open == True,
+    ).first()
     if not pos:
         raise HTTPException(status_code=404, detail="موقعیت باز فعالی یافت نشد.")
 
-    curr_price = pos.current_price
-    net_pnl, message = paper_broker.trim_position(port, position_id, curr_price, ratio=ratio)
-
+    inst = db.query(Instrument).filter(Instrument.ticker == pos.symbol).first()
+    snapshot = _fresh_trusted_instrument_snapshot(db, inst.id if inst else None)
+    order, message = paper_broker.create_exit_order(port, position_id, snapshot.last_price, ratio=ratio)
+    if order is None:
+        raise HTTPException(status_code=400, detail=message)
+    db.add_all([
+        order,
+        DecisionAudit(
+            symbol=pos.symbol, signal_id=None, decision="TRIM_SUBMITTED",
+            model_version="UNFITTED",
+            dataset_version=f"market_snapshot:{to_utc_iso(snapshot.source_timestamp)}",
+            risk_policy_version=paper_broker.policy.policy_id,
+            decision_reason_fa=f"کاهش {int(ratio * 100)}٪ ثبت شد؛ اجرا فقط روی snapshot رسمی بعدی؛ order={order.id}",
+            opportunity_score=0.0, p_profit=0.0, as_of=now_utc(),
+        ),
+    ])
     db.commit()
 
     return {
         "success": True,
         "message": message,
-        "realized_pnl_tomans": round(net_pnl / 10.0),
-        "remaining_quantity": pos.quantity,
-        "remaining_val_tomans": round((pos.quantity * curr_price) / 10.0),
+        "order_id": order.id,
+        "status": order.status,
+        "current_quantity_unchanged": pos.quantity,
     }
 
 
 @router.post("/kill-switch")
 def toggle_paper_kill_switch(req: KillSwitchRequest, db: Session = Depends(get_sync_db)):
     """Activates or deactivates emergency trading kill switch."""
-    port = db.query(Portfolio).first()
+    port = get_active_campaign_portfolio(db)
     if not port:
         raise HTTPException(status_code=404, detail="پورتفوی یافت نشد.")
 
@@ -669,43 +659,58 @@ def get_institutional_risk_policy():
 @router.get("/ledger/cash")
 def get_cash_ledger(db: Session = Depends(get_sync_db)):
     """Returns detailed cash breakdown (settled, unsettled, reserved) and cash transactions."""
-    port = db.query(Portfolio).first()
+    port = get_active_campaign_portfolio(db)
     is_reconciled, report = accounting_reconciler.reconcile_portfolio(port) if port else (True, {})
     return report
 
 
 @router.get("/ledger/fills")
-def get_order_fills_ledger():
-    """Returns execution fills with slippage, delay, and exact fees."""
+def get_order_fills_ledger(db: Session = Depends(get_sync_db)):
+    """Return persisted execution fills; never synthesize transactions."""
+    port = get_active_campaign_portfolio(db)
+    fills = (
+        db.query(OrderFill)
+        .join(BrokerOrder, OrderFill.order_id == BrokerOrder.id)
+        .filter(BrokerOrder.portfolio_id == (port.id if port else "__missing_campaign__"))
+        .order_by(OrderFill.executed_at.desc())
+        .limit(500)
+        .all()
+    )
     return {
-        "fill_count": 6,
+        "fill_count": len(fills),
         "execution_model": "NEXT_BAR_AUCTION_WITH_SLIPPAGE",
-        "fills": [
-            {"symbol": "فولاد", "side": "خرید", "qty": 1_600_000, "price": 4950, "slippage_bps": 12, "fee_tomans": 2_940_000, "status": "تکمیل شده (۱۰۰٪)"},
-            {"symbol": "فملی", "side": "خرید", "qty": 1_100_000, "price": 7200, "slippage_bps": 10, "fee_tomans": 2_940_000, "status": "تکمیل شده (۱۰۰٪)"},
-            {"symbol": "نوری", "side": "خرید", "qty": 450_000, "price": 18500, "slippage_bps": 15, "fee_tomans": 3_090_000, "status": "تکمیل شده (۱۰۰٪)"},
-            {"symbol": "کچاد", "side": "خرید", "qty": 1_800_000, "price": 4100, "slippage_bps": 14, "fee_tomans": 2_740_000, "status": "تکمیل شده (۱۰۰٪)"},
-            {"symbol": "شپنا", "side": "خرید", "qty": 1_500_000, "price": 4600, "slippage_bps": 16, "fee_tomans": 2_560_000, "status": "تکمیل شده (۱۰۰٪)"},
-            {"symbol": "کگل", "side": "خرید", "qty": 1_200_000, "price": 6300, "slippage_bps": 11, "fee_tomans": 2_810_000, "status": "تکمیل شده (۱۰۰٪)"},
-        ],
+        "fills": [{
+            "id": fill.id,
+            "order_id": fill.order_id,
+            "symbol": fill.symbol,
+            "side": fill.side,
+            "quantity": fill.quantity,
+            "fill_price": fill.fill_price,
+            "slippage_rials": fill.slippage_rials,
+            "fees_rials": fill.fees_rials,
+            "tax_rials": fill.tax_rials,
+            "net_value_rials": fill.net_value_rials,
+            "executed_at": fill.executed_at.isoformat(),
+        } for fill in fills],
     }
 
 
 @router.get("/ledger/decisions")
-def get_decision_audit_log():
-    """Returns immutable decision audit trail (Decision Envelope)."""
+def get_decision_audit_log(db: Session = Depends(get_sync_db)):
+    """Return persisted decision envelopes; never synthesize approvals."""
+    decisions = db.query(DecisionAudit).order_by(DecisionAudit.as_of.desc()).limit(500).all()
     return {
-        "model_version": "v2.4-isotonic-brier",
         "risk_policy_version": ACTIVE_RISK_POLICY.version,
-        "dataset_hash": "sha256:7f3b89a10c92",
-        "decisions": [
-            {"symbol": "فولاد", "action": "APPROVED", "score": 82.5, "p_profit": 0.76, "reason_fa": "شکست مقاومت کانال دانچیان با تایید پول حقیقی + همگرایی مومنتوم"},
-            {"symbol": "فملی", "action": "APPROVED", "score": 84.0, "p_profit": 0.78, "reason_fa": "واگرایی مثبت پول هوشمند و عبور از ابر کومو با نسبت خریدار ۱.۵۸"},
-            {"symbol": "نوری", "action": "APPROVED", "score": 86.5, "p_profit": 0.81, "reason_fa": "رتبه ۹ پیوتروسکی ترازنامه + رشد سودآوری کدال + تقاطع صعودی مکدی"},
-            {"symbol": "کچاد", "action": "APPROVED", "score": 79.0, "p_profit": 0.73, "reason_fa": "پولبک موفق به میانگین متحرک ۲۰ روزه همراه با ورود حقوقی"},
-            {"symbol": "شپنا", "action": "APPROVED", "score": 77.5, "p_profit": 0.71, "reason_fa": "فشردگی باندهای بولینگر و جهش حجم معاملات ۲.۲ برابری"},
-            {"symbol": "کگل", "action": "APPROVED", "score": 81.0, "p_profit": 0.75, "reason_fa": "ورود سرانه خریدار سنگین و کراس تنکان بر کیجون در ایچیموکو"},
-            {"symbol": "خودرو", "action": "REJECTED_RISK", "score": 62.0, "p_profit": 0.48, "reason_fa": "رد به علت ریسک نوسان بالا، قدرت فروشنده و عدم رعایت حداقل نسبت سود به ریسک ۱:۱.۸"},
-            {"symbol": "وبملت", "action": "REJECTED_SECTOR_CAP", "score": 74.0, "p_profit": 0.69, "reason_fa": "رد به علت پر شدن سقف ۱۸٪ سهم صنعت بانکداری در پورتفو"},
-        ],
+        "decisions": [{
+            "id": item.id,
+            "symbol": item.symbol,
+            "signal_id": item.signal_id,
+            "action": item.decision,
+            "score": item.opportunity_score,
+            "p_profit": item.p_profit,
+            "reason_fa": item.decision_reason_fa,
+            "model_version": item.model_version,
+            "dataset_version": item.dataset_version,
+            "as_of": item.as_of.isoformat(),
+        } for item in decisions],
     }

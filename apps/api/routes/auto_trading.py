@@ -9,6 +9,8 @@ from packages.domain.models import (
 from packages.shared.database import get_sync_db
 from packages.shared.datetime_utils import now_utc
 from services.paper_broker.scheduler import is_scheduler_running
+from services.paper_broker.campaign import get_active_campaign_portfolio
+from services.paper_broker.attribution import INDICATOR_DEFINITIONS
 
 router = APIRouter(prefix="/auto-trading", tags=["Automated Paper Trading"])
 
@@ -37,15 +39,15 @@ class TradeLogItem(BaseModel):
     exit_at: str | None
     holding_hours: float
     holding_days: float
-    expected_days_to_target: int
+    expected_days_to_target: int | None
     market_regime: str
     market_regime_fa: str
     gross_pnl: float
     net_pnl: float
     return_pct: float
-    risk_pct: float
-    risk_reward_ratio: str | float = "1:2.0"
-    decision_method: str
+    risk_pct: float | None
+    risk_reward_ratio: str | float | None = None
+    decision_method: str | None
     exit_reason: str
     reason_fa: str
     lesson_fa: str
@@ -62,7 +64,7 @@ class IndicatorPerfItem(BaseModel):
     loss_signals: int
     precision: float
     avg_return_when_bullish: float
-    avg_return_when_bearish: float
+    avg_return_when_bearish: float | None
     cumulative_pnl: float
 
 
@@ -100,13 +102,18 @@ async def trigger_manual_cycle(db: Session = Depends(get_sync_db)):
     from services.paper_broker.auto_trader import auto_trader
 
     try:
-        await auto_trader.run_cycle()
+        result = await auto_trader.run_cycle(manual=True)
+        if not result.get("executed"):
+            raise HTTPException(status_code=409, detail=result)
         return {
             "success": True,
             "message": "یک چرخه معاملاتی با موفقیت اجرا شد.",
             "total_cycles": auto_trader.total_cycles,
             "total_trades": auto_trader.total_trades,
+            "cycle": result,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"خطا در اجرای چرخه: {str(e)}")
 
@@ -119,7 +126,10 @@ def get_trade_log(
     db: Session = Depends(get_sync_db),
 ):
     """Returns paper trade logs for ML training and review."""
-    query = db.query(PaperTradeLog).order_by(PaperTradeLog.entry_at.desc())
+    port = get_active_campaign_portfolio(db)
+    query = db.query(PaperTradeLog).filter(
+        PaperTradeLog.portfolio_id == (port.id if port else "__missing_campaign__")
+    ).order_by(PaperTradeLog.entry_at.desc())
 
     if symbol:
         query = query.filter(PaperTradeLog.symbol == symbol)
@@ -138,7 +148,7 @@ def get_trade_log(
     for log in logs:
         invested_r = getattr(log, "total_invested_rials", None) or (log.entry_price * log.quantity)
         h_days = getattr(log, "holding_days", None) or round(log.holding_hours / 24.0, 1)
-        m_regime = getattr(log, "market_regime", "risk_on") or "risk_on"
+        m_regime = getattr(log, "market_regime", None) or "unknown"
         result.append(
             TradeLogItem(
                 id=log.id,
@@ -153,15 +163,15 @@ def get_trade_log(
                 exit_at=log.exit_at.isoformat() if log.exit_at else None,
                 holding_hours=round(log.holding_hours, 1),
                 holding_days=h_days,
-                expected_days_to_target=getattr(log, "expected_days_to_target", 5) or 5,
+                expected_days_to_target=getattr(log, "expected_days_to_target", None) or None,
                 market_regime=m_regime,
                 market_regime_fa=regime_fa_map.get(m_regime, m_regime),
                 gross_pnl=round(log.gross_pnl),
                 net_pnl=round(log.net_pnl),
                 return_pct=round(log.return_pct, 2),
-                risk_pct=getattr(log, "risk_pct", 0.5) or 0.5,
-                risk_reward_ratio=getattr(log, "risk_reward_ratio", 2.0) or 2.0,
-                decision_method=getattr(log, "decision_method", "") or "تأیید چند استراتژی",
+                risk_pct=getattr(log, "risk_pct", None) or None,
+                risk_reward_ratio=getattr(log, "risk_reward_ratio", None) or None,
+                decision_method=getattr(log, "decision_method", None) or None,
                 exit_reason=log.exit_reason,
                 reason_fa=log.reason_fa,
                 lesson_fa=log.lesson_fa,
@@ -176,27 +186,34 @@ def get_trade_log(
 @router.get("/attribution", response_model=list[IndicatorPerfItem])
 @router.get("/indicator-performance", response_model=list[IndicatorPerfItem])
 def get_indicator_attribution(db: Session = Depends(get_sync_db)):
-    """Returns performance attribution for each indicator."""
-    perfs = (
-        db.query(IndicatorPerformance)
-        .order_by(IndicatorPerformance.cumulative_pnl.desc())
-        .all()
-    )
-
-    return [
-        IndicatorPerfItem(
-            indicator_name=p.indicator_name,
-            display_name_fa=p.display_name_fa,
-            total_signals=p.total_signals,
-            profitable_signals=p.profitable_signals,
-            loss_signals=p.loss_signals,
-            precision=round(p.precision, 3),
-            avg_return_when_bullish=round(p.avg_return_when_bullish, 2),
-            avg_return_when_bearish=round(p.avg_return_when_bearish, 2),
-            cumulative_pnl=round(p.cumulative_pnl),
-        )
-        for p in perfs
-    ]
+    """Derive indicator attribution only from closed trades in the active campaign."""
+    port = get_active_campaign_portfolio(db)
+    if not port:
+        return []
+    logs = db.query(PaperTradeLog).filter(
+        PaperTradeLog.portfolio_id == port.id,
+        PaperTradeLog.is_closed == True,
+    ).all()
+    buckets: dict[str, list[PaperTradeLog]] = {}
+    for log in logs:
+        for indicator in (log.indicator_scores or {}):
+            buckets.setdefault(indicator, []).append(log)
+    result = []
+    for indicator, rows in buckets.items():
+        winners = [row for row in rows if row.net_pnl > 0]
+        losers = [row for row in rows if row.net_pnl < 0]
+        result.append(IndicatorPerfItem(
+            indicator_name=indicator,
+            display_name_fa=INDICATOR_DEFINITIONS.get(indicator, {}).get("name_fa", indicator),
+            total_signals=len(rows),
+            profitable_signals=len(winners),
+            loss_signals=len(losers),
+            precision=round(len(winners) / len(rows), 3),
+            avg_return_when_bullish=round(sum(row.return_pct for row in rows) / len(rows), 2),
+            avg_return_when_bearish=None,
+            cumulative_pnl=round(sum(row.net_pnl for row in rows)),
+        ))
+    return sorted(result, key=lambda item: item.cumulative_pnl, reverse=True)
 
 
 @router.get("/portfolio-history", response_model=list[PortfolioHistoryItem])
@@ -205,8 +222,10 @@ def get_portfolio_history(
     db: Session = Depends(get_sync_db),
 ):
     """Returns portfolio equity snapshots for equity curve chart."""
+    port = get_active_campaign_portfolio(db)
     snapshots = (
         db.query(PortfolioSnapshot)
+        .filter(PortfolioSnapshot.portfolio_id == (port.id if port else "__missing_campaign__"))
         .order_by(PortfolioSnapshot.snapshot_at.asc())
         .limit(limit)
         .all()

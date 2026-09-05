@@ -19,8 +19,9 @@ interface SymbolDetailProps {
   initialSymbol?: string;
 }
 
-export const SymbolDetailView: React.FC<SymbolDetailProps> = ({ initialSymbol = "فولاد" }) => {
+export const SymbolDetailView: React.FC<SymbolDetailProps> = ({ initialSymbol = "" }) => {
   const [selectedSymbol, setSelectedSymbol] = useState(initialSymbol);
+  const [availableSymbols, setAvailableSymbols] = useState<string[]>(initialSymbol ? [initialSymbol] : []);
   const [chartData, setChartData] = useState<any | null>(null);
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -33,24 +34,19 @@ export const SymbolDetailView: React.FC<SymbolDetailProps> = ({ initialSymbol = 
   // Active Sub-Indicator Panel Tab
   const [activeIndicator, setActiveIndicator] = useState<"volume" | "rsi" | "macd" | "client_flow" | "orderbook" | "pivots">("client_flow");
 
-  const availableSymbols = [
-    "فولاد",
-    "فملی",
-    "خودرو",
-    "خساپا",
-    "وبملت",
-    "شپنا",
-    "شبندر",
-    "شستا",
-    "کچاد",
-    "فارس",
-    "نوری",
-    "فخوز",
-    "وغدیر",
-  ];
+  useEffect(() => {
+    fetch("/api/v1/symbols")
+      .then((res) => (res.ok ? res.json() : []))
+      .then((rows) => {
+        const symbols = Array.isArray(rows) ? rows.map((row: any) => row.ticker).filter(Boolean) : [];
+        setAvailableSymbols(symbols);
+        if (!selectedSymbol && symbols.length > 0) setSelectedSymbol(symbols[0]);
+      })
+      .catch(() => setAvailableSymbols(initialSymbol ? [initialSymbol] : []));
+  }, [initialSymbol, selectedSymbol]);
 
   useEffect(() => {
-    fetchChartData(selectedSymbol);
+    if (selectedSymbol) fetchChartData(selectedSymbol);
   }, [selectedSymbol]);
 
   const fetchChartData = async (sym: string) => {
@@ -102,8 +98,8 @@ export const SymbolDetailView: React.FC<SymbolDetailProps> = ({ initialSymbol = 
   const paddingX = 35;
   const paddingY = 25;
 
-  const minPrice = bars.length > 0 ? Math.min(...bars.map((b: any) => b.low)) * 0.98 : 1000;
-  const maxPrice = bars.length > 0 ? Math.max(...bars.map((b: any) => b.high)) * 1.02 : 2000;
+  const minPrice = bars.length > 0 ? Math.min(...bars.map((b: any) => b.low)) * 0.98 : 0;
+  const maxPrice = bars.length > 0 ? Math.max(...bars.map((b: any) => b.high)) * 1.02 : 1;
 
   const getX = (index: number) => paddingX + (index * (width - 2 * paddingX)) / Math.max(1, bars.length - 1);
   const getY = (price: number) => height - paddingY - ((price - minPrice) / Math.max(1, maxPrice - minPrice)) * (height - 2 * paddingY);
@@ -151,7 +147,7 @@ export const SymbolDetailView: React.FC<SymbolDetailProps> = ({ initialSymbol = 
             gap: "0.35rem",
           }}>
             <span style={{ width: "8px", height: "8px", borderRadius: "50%", backgroundColor: "var(--tse-green)", display: "inline-block" }}></span>
-            <span>داده‌های زنده TSETMC متصل و همگام</span>
+            <span>{chartData ? "داده رسمی نمودار بارگذاری شده" : "داده رسمی در دسترس نیست"}</span>
           </span>
         </div>
       </div>
@@ -206,21 +202,21 @@ export const SymbolDetailView: React.FC<SymbolDetailProps> = ({ initialSymbol = 
 
           <div className="card-panel">
             <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>قدرت خریدار حقیقی (تابلوخوانی)</div>
-            <div style={{ fontSize: "1.45rem", fontWeight: 800, color: (latestBar.real_buy_power_ratio || 1) >= 1.2 ? "var(--tse-green)" : "var(--text-primary)", marginTop: "0.2rem" }} className="tabular-num">
-              {latestBar.real_buy_power_ratio || 1.35} <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>برابر فروشنده</span>
+            <div style={{ fontSize: "1.45rem", fontWeight: 800, color: latestBar.real_buy_power_ratio != null && latestBar.real_buy_power_ratio >= 1.2 ? "var(--tse-green)" : "var(--text-primary)", marginTop: "0.2rem" }} className="tabular-num">
+              {latestBar.real_buy_power_ratio ?? "—"} <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>برابر فروشنده</span>
             </div>
-            <div style={{ fontSize: "0.75rem", color: (latestBar.net_real_inflow || 0) >= 0 ? "var(--tse-green)" : "var(--tse-red)", marginTop: "0.25rem" }} className="tabular-num">
-              خالص ورود پول: {((latestBar.net_real_inflow || 15_000_000_000) / 1_000_000_000).toLocaleString("fa-IR", { maximumFractionDigits: 1 })} میلیارد ریال
+            <div style={{ fontSize: "0.75rem", color: latestBar.net_real_inflow != null && latestBar.net_real_inflow >= 0 ? "var(--tse-green)" : "var(--tse-red)", marginTop: "0.25rem" }} className="tabular-num">
+              خالص ورود پول: {latestBar.net_real_inflow != null ? `${(latestBar.net_real_inflow / 1_000_000_000).toLocaleString("fa-IR", { maximumFractionDigits: 1 })} میلیارد ریال` : "—"}
             </div>
           </div>
 
           <div className="card-panel">
             <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>ارزش معاملات امروز</div>
             <div style={{ fontSize: "1.45rem", fontWeight: 800, color: "var(--text-primary)", marginTop: "0.2rem" }} className="tabular-num">
-              {((latestBar.value || 85_000_000_000) / 1_000_000_000).toLocaleString("fa-IR", { maximumFractionDigits: 0 })} <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>میلیارد ریال</span>
+              {latestBar.value != null ? (latestBar.value / 1_000_000_000).toLocaleString("fa-IR", { maximumFractionDigits: 0 }) : "—"} <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>میلیارد ریال</span>
             </div>
             <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: "0.25rem" }}>
-              حجم: <span className="tabular-num">{((latestBar.volume || 10_000_000) / 1_000_000).toLocaleString("fa-IR", { maximumFractionDigits: 1 })}</span> میلیون برگه سهم
+              حجم: <span className="tabular-num">{latestBar.volume != null ? (latestBar.volume / 1_000_000).toLocaleString("fa-IR", { maximumFractionDigits: 1 }) : "—"}</span> میلیون برگه سهم
             </div>
           </div>
         </div>
@@ -404,7 +400,7 @@ export const SymbolDetailView: React.FC<SymbolDetailProps> = ({ initialSymbol = 
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "0.5rem", fontSize: "0.82rem" }}>
               <span style={{ fontWeight: 700 }}>نمودار سرانه خریدار حقیقی به فروشنده و ورود پول هوشمند</span>
               <span style={{ color: "var(--tse-green)", fontWeight: 700 }}>
-                قدرت جاری: {latestBar?.real_buy_power_ratio || 1.35} برابر
+                قدرت جاری: {latestBar?.real_buy_power_ratio != null ? `${latestBar.real_buy_power_ratio} برابر` : "—"}
               </span>
             </div>
 
@@ -415,8 +411,9 @@ export const SymbolDetailView: React.FC<SymbolDetailProps> = ({ initialSymbol = 
                 <text x={width - paddingX + 5} y={subHeight / 2 + 4} fill="var(--text-muted)" fontSize="9" fontFamily="Vazirmatn">1.0X</text>
 
                 {bars.map((b: any, idx: number) => {
+                  if (b.real_buy_power_ratio == null) return null;
                   const x = getX(idx);
-                  const bp = b.real_buy_power_ratio || 1.0;
+                  const bp = b.real_buy_power_ratio;
                   const barColor = bp >= 1.2 ? "#2ea043" : bp >= 0.9 ? "#58a6ff" : "#f85149";
                   const barH = Math.min(50, Math.abs(bp - 1.0) * 35);
                   const isAbove = bp >= 1.0;
@@ -444,8 +441,8 @@ export const SymbolDetailView: React.FC<SymbolDetailProps> = ({ initialSymbol = 
           <div>
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "0.5rem", fontSize: "0.82rem" }}>
               <span style={{ fontWeight: 700 }}>اسیلاتور شاخص قدرت نسبی (RSI 14)</span>
-              <span style={{ color: (latestBar?.rsi_14 || 50) >= 70 ? "var(--tse-red)" : (latestBar?.rsi_14 || 50) <= 30 ? "var(--tse-green)" : "var(--text-primary)", fontWeight: 700 }}>
-                RSI: {latestBar?.rsi_14 || 55.4}
+              <span style={{ color: latestBar?.rsi_14 != null && latestBar.rsi_14 >= 70 ? "var(--tse-red)" : latestBar?.rsi_14 != null && latestBar.rsi_14 <= 30 ? "var(--tse-green)" : "var(--text-primary)", fontWeight: 700 }}>
+                RSI: {latestBar?.rsi_14 ?? "—"}
               </span>
             </div>
 
@@ -461,7 +458,7 @@ export const SymbolDetailView: React.FC<SymbolDetailProps> = ({ initialSymbol = 
 
                 {/* RSI Line */}
                 <path
-                  d={bars.map((b: any, i: number) => `${i === 0 ? "M" : "L"} ${getX(i)} ${getSubY(b.rsi_14 || 50, 0, 100)}`).join(" ")}
+                  d={bars.reduce((path: string, b: any, i: number) => b.rsi_14 == null ? path : `${path ? `${path} L` : "M"} ${getX(i)} ${getSubY(b.rsi_14, 0, 100)}`, "")}
                   fill="none"
                   stroke="#a371f7"
                   strokeWidth="1.8"
@@ -477,7 +474,7 @@ export const SymbolDetailView: React.FC<SymbolDetailProps> = ({ initialSymbol = 
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "0.5rem", fontSize: "0.82rem" }}>
               <span style={{ fontWeight: 700 }}>اندیکاتور MACD (12, 26, 9) و هیستوگرام</span>
               <span style={{ color: "var(--text-secondary)" }}>
-                MACD: <strong style={{ color: "#58a6ff" }}>{latestBar?.macd || 0}</strong> | Signal: <strong style={{ color: "#f0883e" }}>{latestBar?.macd_signal || 0}</strong>
+                MACD: <strong style={{ color: "#58a6ff" }}>{latestBar?.macd ?? "—"}</strong> | Signal: <strong style={{ color: "#f0883e" }}>{latestBar?.macd_signal ?? "—"}</strong>
               </span>
             </div>
 

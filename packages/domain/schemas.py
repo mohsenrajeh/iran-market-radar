@@ -33,6 +33,9 @@ class MarketOverviewResponse(BaseModel):
     opportunity_count_a: int
     opportunity_count_b: int
     data_health_status: str  # HEALTHY, DEGRADED, STALE
+    market_data_as_of_utc: str | None = None
+    market_data_age_seconds: int | None = None
+    data_health_reasons_fa: list[str] = Field(default_factory=list)
 
 
 class SectorScorecard(BaseModel):
@@ -65,8 +68,8 @@ class Invalidation(BaseModel):
 
 class ExitPlan(BaseModel):
     type: str = "trailing_plus_time_stop"
-    targets: list[float] = []
-    time_stop_sessions: int | None = 5
+    targets: list[float] = Field(default_factory=list)
+    time_stop_sessions: int | None = None
     trailing_rule: str | None = None
 
 
@@ -88,8 +91,8 @@ class PublishedSignalSchema(BaseModel):
     as_of: datetime
     horizon: str = "5d"
     direction: Literal["long"] = "long"
-    actionable: bool = True
-    grade: str = "A"
+    actionable: bool = False
+    grade: str = "C"
     
     opportunity_score: float = Field(ge=0, le=100)
     p_profit: float = Field(ge=0, le=1)
@@ -107,14 +110,15 @@ class PublishedSignalSchema(BaseModel):
     liquidity_score: float = Field(ge=0, le=100)
     fill_probability_score: float = Field(ge=0, le=100)
     data_quality: float = Field(ge=0, le=100)
-    regime: str = "risk_on"
+    regime: str = "unknown"
     
     strategy_votes: list[StrategyVote]
     top_reasons_fa: list[str]
     risk_flags_fa: list[str]
+    decision_components: dict = Field(default_factory=dict)
     
     model_version: str | None = None
-    strategy_version: str = "2026.08.1"
+    strategy_version: str = "UNVERSIONED"
     calibration_version: str | None = None
     expires_at: datetime | None = None
 
@@ -192,9 +196,11 @@ class StrategySummary(BaseModel):
     version: str
     description_fa: str
     supported_horizons: list[str]
-    historical_win_rate_pct: float
-    historical_brier_score: float
-    historical_trades: int
+    historical_win_rate_pct: float | None = None
+    historical_brier_score: float | None = None
+    historical_trades: int = 0
+    validation_status: str = "NOT_RUN"
+    latest_backtest_id: str | None = None
 
 
 # ==========================================
@@ -255,8 +261,8 @@ class BacktestTradeItem(BaseModel):
 
 class OrderCreateFromSignalRequest(BaseModel):
     signal_id: str
-    quantity: int | None = None
-    capital_allocation: float | None = None
+    quantity: int | None = Field(default=None, ge=1)
+    capital_allocation: float | None = Field(default=None, gt=0)
 
 
 class PositionResponse(BaseModel):
@@ -273,16 +279,16 @@ class PositionResponse(BaseModel):
     target_price: float | None = None
     total_invested_rials: float = 0.0
     total_invested_tomans: float = 0.0
-    risk_pct: float = 0.5
-    risk_reward_ratio: str | float = "1:2.0"
-    expected_days_to_target: int = 5
+    risk_pct: float = 0.0
+    risk_reward_ratio: str | float = "UNKNOWN"
+    expected_days_to_target: int = 0
     days_open: float = 0.0
-    market_regime: str = "risk_on"
-    market_regime_fa: str = "صعودی پرقدرت"
+    market_regime: str = "unknown"
+    market_regime_fa: str = "نامشخص"
     decision_method: str = ""
     entry_reason_fa: str = ""
-    distance_to_target_pct: float = 0.0
-    distance_to_stop_pct: float = 0.0
+    distance_to_target_pct: float | None = None
+    distance_to_stop_pct: float | None = None
     client_power_ratio: float | None = None
     risk_flags_fa: list[str] = []
     opened_at: datetime
@@ -292,16 +298,21 @@ class PositionResponse(BaseModel):
 class PortfolioResponse(BaseModel):
     id: str
     name: str
+    campaign_id: str | None = None
+    campaign_status: str | None = None
+    campaign_started_at: datetime | None = None
+    campaign_ends_at: datetime | None = None
+    initial_cash: float
     cash: float
     total_equity: float
     realized_pnl: float
     unrealized_pnl: float
     open_positions_count: int
     kill_switch_active: bool
-    portfolio_snapshot_id: str = "SNAP-TSE-2026-0816"
-    ledger_sequence: int = 142
-    risk_policy_version: str = "2.5.0-ENTERPRISE"
-    as_of: str = ""
+    portfolio_snapshot_id: str
+    ledger_sequence: int
+    risk_policy_version: str
+    as_of: str
     positions: list[PositionResponse]
 
 
@@ -309,10 +320,10 @@ class PositionDetailResponse(BaseModel):
     position: PositionResponse
     name_fa: str
     sector_name: str
-    target_price_2: float
-    progress_to_target_pct: float
-    distance_to_target_rials: float
-    distance_to_stop_rials: float
+    target_price_2: float | None
+    progress_to_target_pct: float | None
+    distance_to_target_rials: float | None
+    distance_to_stop_rials: float | None
     candles: list[dict]
     strategy_votes: list[dict]
     active_indicators: dict
@@ -421,14 +432,17 @@ class CommodityItem(BaseModel):
 
 
 class MacroDashboardResponse(BaseModel):
-    nima_usd_rate: float
-    nima_usd_change_pct: float
-    free_market_usd_rate: float
-    gap_nima_free_pct: float
-    interbank_interest_rate: float
+    status: str = "BLOCKED"
+    reason_fa: str | None = None
+    provider_name: str | None = None
+    nima_usd_rate: float | None
+    nima_usd_change_pct: float | None
+    free_market_usd_rate: float | None
+    gap_nima_free_pct: float | None
+    interbank_interest_rate: float | None
     commodities: list[CommodityItem]
     macro_regime_fa: str
-    last_updated_jalali: str
+    last_updated_jalali: str | None
 
 
 # ==========================================
@@ -577,24 +591,24 @@ class StrategyPerformanceDetail(BaseModel):
     closed_trades: int
     wins: int
     losses: int
-    win_rate_pct: float
-    net_expectancy: float
-    avg_R: float
-    median_R: float
-    profit_factor: float
-    avg_win_R: float
-    avg_loss_R: float
+    win_rate_pct: float | None
+    net_expectancy: float | None
+    avg_R: float | None
+    median_R: float | None
+    profit_factor: float | None
+    avg_win_R: float | None
+    avg_loss_R: float | None
     max_consecutive_losses: int
     max_consecutive_wins: int
-    avg_MFE: float
-    avg_MAE: float
-    avg_holding_sessions: float
-    drawdown_contribution_pct: float
+    avg_MFE: float | None
+    avg_MAE: float | None
+    avg_holding_sessions: float | None
+    drawdown_contribution_pct: float | None
     total_fees_tomans: float
     total_slippage_tomans: float
     sample_sufficiency: str
     sample_sufficiency_fa: str
-    health_score: float
+    health_score: float | None
     health_status: str
     warnings: list[str] = []
 
@@ -628,6 +642,10 @@ class LearningDashboardResponse(BaseModel):
     rejected_experiments_count: int
     data_sufficiency_status: str
     champion_status_summary: str
-    overall_health_score: float
-
-
+    overall_health_score: float | None
+    tuning_stage: str
+    tuning_stage_fa: str
+    minimum_closed_trades_for_tuning: int
+    observed_market_regimes: int
+    next_action_fa: str
+    automatic_promotion_enabled: bool = False

@@ -1,5 +1,5 @@
 """Quantitative Learning, Post-Mortem, Research Queue, and Champion vs Challenger API routes."""
-from datetime import datetime, timezone
+from collections import defaultdict
 from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -14,6 +14,8 @@ from packages.domain.models import (
     SampleSufficiency,
     ProposalStatus,
     LessonCategory,
+    BacktestRun,
+    CalibrationArtifact,
 )
 from packages.domain.schemas import (
     LearningDashboardResponse,
@@ -26,6 +28,14 @@ from packages.shared.database import get_sync_db
 from packages.shared.datetime_utils import now_utc
 from packages.strategies.registry import strategy_registry
 from services.paper_broker.learning_engine import learning_engine
+from apps.api.routes.auth import get_current_user
+from services.paper_broker.campaign import get_active_campaign_portfolio
+from services.scorer.calibration_store import (
+    MIN_OOS_SAMPLES,
+    MIN_TRAIN_SAMPLES,
+    activate_candidate,
+    train_candidate,
+)
 
 router = APIRouter(prefix="/learning", tags=["Strategy Learning & Research"])
 
@@ -33,45 +43,110 @@ router = APIRouter(prefix="/learning", tags=["Strategy Learning & Research"])
 class ProposalActionRequest(BaseModel):
     action: Literal["backtest", "oos_validate", "paper_challenger", "approve", "reject", "promote"]
     rejection_reason_fa: str | None = None
-    approved_by: str | None = "قوانین کمیته سرمایه‌گذاری"
+
+
+def _max_streak(trades: list[ClosedTradeHistory], *, winning: bool) -> int:
+    current = maximum = 0
+    for trade in sorted(trades, key=lambda item: item.closed_at):
+        matched = trade.net_pnl > 0 if winning else trade.net_pnl < 0
+        current = current + 1 if matched else 0
+        maximum = max(maximum, current)
+    return maximum
+
+
+def _drawdown_contribution(strategy_trades: list[ClosedTradeHistory], all_trades: list[ClosedTradeHistory]) -> float | None:
+    total_losses = abs(sum(min(0.0, trade.net_pnl) for trade in all_trades))
+    if total_losses <= 0:
+        return None
+    strategy_losses = abs(sum(min(0.0, trade.net_pnl) for trade in strategy_trades))
+    return round((strategy_losses / total_losses) * 100.0, 2)
 
 
 @router.get("/dashboard", response_model=LearningDashboardResponse)
 def get_learning_dashboard(db: Session = Depends(get_sync_db)):
     """Returns learning center executive overview and data sufficiency."""
-    from apps.api.routes.history import _seed_initial_closed_trades_if_empty
-    _seed_initial_closed_trades_if_empty(db)
-
-    total_closed = db.query(ClosedTradeHistory).count()
-    proposals = db.query(ExperimentProposal).all()
+    port = get_active_campaign_portfolio(db)
+    portfolio_id = port.id if port else "__missing_campaign__"
+    total_closed = db.query(ClosedTradeHistory).filter(ClosedTradeHistory.portfolio_id == portfolio_id).count()
+    observed_regimes = {
+        row[0] for row in db.query(ClosedTradeHistory.market_regime_at_entry)
+        .filter(ClosedTradeHistory.portfolio_id == portfolio_id)
+        .distinct().all()
+        if row[0] not in {None, "", "unknown"}
+    }
+    proposals = (
+        db.query(ExperimentProposal)
+        .join(StructuredLesson, ExperimentProposal.source_lesson_id == StructuredLesson.id)
+        .join(ClosedTradeHistory, StructuredLesson.trade_id == ClosedTradeHistory.id)
+        .filter(ClosedTradeHistory.portfolio_id == portfolio_id)
+        .all()
+    )
     active_challengers = sum(1 for p in proposals if p.status == "PAPER_CHALLENGER")
     pending_exp = sum(1 for p in proposals if p.status in ["PROPOSED", "BACKTESTING", "OOS_TESTING"])
     rejected_exp = sum(1 for p in proposals if p.status == "REJECTED")
 
-    sufficiency_status = "شواهد اولیه تجمیع‌شده (تعداد نمونه‌ها در فاز اعتبارسنجی)" if total_closed >= 10 else "نمونه ناکافی"
-    champion_summary = "نسخه‌های ۱۲ استراتژی پروداکشن (Champion) منجمد و پایدار هستند."
+    completed_runs = db.query(BacktestRun).filter(BacktestRun.status == "COMPLETED").all()
+    validated_strategy_keys = {run.strategy_key for run in completed_runs if (run.trade_count or 0) >= 20}
+    strategies_under_review = {
+        p.strategy_key for p in proposals
+        if p.status in {"PROPOSED", "BACKTESTING", "OOS_TESTING", "PAPER_CHALLENGER"}
+    }
+    suff_enum, sufficiency_status = learning_engine.evaluate_sample_sufficiency(total_closed, len(observed_regimes))
+    process_scores = [
+        row[0] for row in db.query(TradePostMortem.process_quality_score)
+        .join(ClosedTradeHistory, TradePostMortem.trade_id == ClosedTradeHistory.id)
+        .filter(ClosedTradeHistory.portfolio_id == portfolio_id)
+        .all() if row[0] is not None
+    ]
+    overall_health = round(sum(process_scores) / len(process_scores), 1) if process_scores else None
+    champion_summary = (
+        f"{len(validated_strategy_keys)} استراتژی دارای بک‌تست تکمیل‌شده با حداقل ۲۰ معامله است."
+        if validated_strategy_keys
+        else "هیچ نسخه‌ای هنوز شواهد کافی برای عنوان Champion ندارد."
+    )
+
+    minimum_tuning = MIN_TRAIN_SAMPLES + MIN_OOS_SAMPLES
+    active_calibration = db.query(CalibrationArtifact).filter(CalibrationArtifact.status == "ACTIVE").first()
+    if active_calibration:
+        tuning_stage = "ACTIVE_VALIDATED_CURVE"
+        tuning_stage_fa = "نسخه احتمال‌سنجی خارج‌نمونه فعال است"
+        next_action_fa = "نتایج نسخه فعال را فقط روی معاملات جدید پایش کنید؛ بازآموزی روی همان نمونه ممنوع است."
+    elif total_closed >= minimum_tuning and len(observed_regimes) >= 2:
+        tuning_stage = "READY_FOR_CANDIDATE"
+        tuning_stage_fa = "آماده ساخت نسخه آزمایشی"
+        next_action_fa = "یک نسخه کاندید بسازید؛ فعال‌سازی فقط پس از بهبود Brier خارج‌نمونه ممکن است."
+    else:
+        tuning_stage = "COLLECTING_EVIDENCE"
+        tuning_stage_fa = "در حال جمع‌آوری شواهد واقعی"
+        next_action_fa = f"تا حداقل {minimum_tuning} معامله بسته در دو وضعیت بازار، هیچ پارامتر تولیدی تغییر نمی‌کند."
 
     return LearningDashboardResponse(
         total_closed_trades=total_closed,
-        validated_strategies_count=12,
-        strategies_under_review_count=3,
+        validated_strategies_count=len(validated_strategy_keys),
+        strategies_under_review_count=len(strategies_under_review),
         active_challengers_count=active_challengers,
         pending_experiments_count=pending_exp,
         rejected_experiments_count=rejected_exp,
         data_sufficiency_status=sufficiency_status,
         champion_status_summary=champion_summary,
-        overall_health_score=94.2,
+        overall_health_score=overall_health,
+        tuning_stage=tuning_stage,
+        tuning_stage_fa=tuning_stage_fa,
+        minimum_closed_trades_for_tuning=minimum_tuning,
+        observed_market_regimes=len(observed_regimes),
+        next_action_fa=next_action_fa,
+        automatic_promotion_enabled=False,
     )
 
 
 @router.get("/strategies/performance", response_model=list[StrategyPerformanceDetail])
 def get_strategies_learning_performance(db: Session = Depends(get_sync_db)):
     """Returns deep performance metrics and sample sufficiency for all 12 quantitative strategies."""
-    from apps.api.routes.history import _seed_initial_closed_trades_if_empty
-    _seed_initial_closed_trades_if_empty(db)
-
     all_strategies = strategy_registry.list_strategies()
-    trades = db.query(ClosedTradeHistory).all()
+    port = get_active_campaign_portfolio(db)
+    trades = db.query(ClosedTradeHistory).filter(
+        ClosedTradeHistory.portfolio_id == (port.id if port else "__missing_campaign__")
+    ).all()
 
     trade_groups: dict[str, list[ClosedTradeHistory]] = {}
     for t in trades:
@@ -92,34 +167,25 @@ def get_strategies_learning_performance(db: Session = Depends(get_sync_db)):
             avg_win_r = sum(t.realized_R for t in wins) / max(len(wins), 1)
             avg_loss_r = sum(t.realized_R for t in losses) / max(len(losses), 1)
             expectancy = ((len(wins) / n_count) * avg_win_r) + ((len(losses) / n_count) * avg_loss_r)
-            profit_factor = (sum(t.net_pnl for t in wins) / abs(sum(t.net_pnl for t in losses))) if losses else 4.5
+            profit_factor = (sum(t.net_pnl for t in wins) / abs(sum(t.net_pnl for t in losses))) if losses else None
             avg_mfe = sum(t.MFE for t in s_trades) / n_count
             avg_mae = sum(t.MAE for t in s_trades) / n_count
             avg_holding = sum(t.holding_sessions for t in s_trades) / n_count
             total_fees = sum(t.total_cost for t in s_trades) / 10.0
             total_slip = sum(t.slippage_cost for t in s_trades) / 10.0
         else:
-            # Baseline parameters if no trade closed yet for this specific sub-strategy
-            win_rate = 63.5
-            avg_r = 1.85
-            median_r = 1.60
-            avg_win_r = 2.45
-            avg_loss_r = -0.92
-            expectancy = 0.42
-            profit_factor = 2.15
-            avg_mfe = 11.8
-            avg_mae = 1.9
-            avg_holding = 6.5
-            total_fees = 450_000.0
-            total_slip = 180_000.0
+            win_rate = avg_r = median_r = avg_win_r = avg_loss_r = None
+            expectancy = profit_factor = avg_mfe = avg_mae = avg_holding = None
+            total_fees = total_slip = 0.0
 
-        suff_enum, suff_fa = learning_engine.evaluate_sample_sufficiency(n_count)
-        health_score = 90.0 + (win_rate * 0.1) if win_rate > 50 else 75.0
+        regime_count = len({trade.market_regime_at_entry for trade in s_trades if trade.market_regime_at_entry not in {"", "unknown"}})
+        suff_enum, suff_fa = learning_engine.evaluate_sample_sufficiency(n_count, regime_count)
+        health_score = round(max(0.0, min(100.0, 50.0 + (expectancy or 0.0) * 20.0)), 1) if n_count >= 20 else None
 
         warnings = []
         if n_count < 20:
             warnings.append("حجم نمونه آماری کمتر از حداقل آستانه ۲۰ معامله است؛ به نتایج وزن مطلق ندهید.")
-        if avg_mae > 4.0:
+        if avg_mae is not None and avg_mae > 4.0:
             warnings.append("حداکثر نوسان نامطلوب (MAE) بالاتر از حد مطلوب است؛ استاپ‌ها را بازبینی کنید.")
 
         result.append(
@@ -128,27 +194,27 @@ def get_strategies_learning_performance(db: Session = Depends(get_sync_db)):
                 strategy_name_fa=strat.name_fa,
                 strategy_version="v1.0",
                 closed_trades=n_count,
-                wins=len(wins) if n_count > 0 else int(15 * 0.65),
-                losses=len(losses) if n_count > 0 else int(15 * 0.35),
-                win_rate_pct=round(win_rate, 1),
-                net_expectancy=round(expectancy, 2),
-                avg_R=round(avg_r, 2),
-                median_R=round(median_r, 2),
-                profit_factor=round(profit_factor, 2),
-                avg_win_R=round(avg_win_r, 2),
-                avg_loss_R=round(avg_loss_r, 2),
-                max_consecutive_losses=2,
-                max_consecutive_wins=6,
-                avg_MFE=round(avg_mfe, 1),
-                avg_MAE=round(avg_mae, 1),
-                avg_holding_sessions=round(avg_holding, 1),
-                drawdown_contribution_pct=2.1,
+                wins=len(wins),
+                losses=len(losses),
+                win_rate_pct=round(win_rate, 1) if win_rate is not None else None,
+                net_expectancy=round(expectancy, 2) if expectancy is not None else None,
+                avg_R=round(avg_r, 2) if avg_r is not None else None,
+                median_R=round(median_r, 2) if median_r is not None else None,
+                profit_factor=round(profit_factor, 2) if profit_factor is not None else None,
+                avg_win_R=round(avg_win_r, 2) if avg_win_r is not None else None,
+                avg_loss_R=round(avg_loss_r, 2) if avg_loss_r is not None else None,
+                max_consecutive_losses=_max_streak(s_trades, winning=False),
+                max_consecutive_wins=_max_streak(s_trades, winning=True),
+                avg_MFE=round(avg_mfe, 1) if avg_mfe is not None else None,
+                avg_MAE=round(avg_mae, 1) if avg_mae is not None else None,
+                avg_holding_sessions=round(avg_holding, 1) if avg_holding is not None else None,
+                drawdown_contribution_pct=_drawdown_contribution(s_trades, trades),
                 total_fees_tomans=round(total_fees),
                 total_slippage_tomans=round(total_slip),
                 sample_sufficiency=suff_enum.value,
                 sample_sufficiency_fa=suff_fa,
-                health_score=round(health_score, 1),
-                health_status="عالی و کالیبره‌شده" if health_score >= 85 else "نیازمند پایش",
+                health_score=health_score,
+                health_status=("قابل ارزیابی" if health_score is not None else "نمونه ناکافی"),
                 warnings=warnings,
             )
         )
@@ -156,13 +222,88 @@ def get_strategies_learning_performance(db: Session = Depends(get_sync_db)):
     return result
 
 
+@router.get("/calibration/artifacts")
+def list_calibration_artifacts(db: Session = Depends(get_sync_db)):
+    port = get_active_campaign_portfolio(db)
+    if not port:
+        return []
+    artifacts = (
+        db.query(CalibrationArtifact)
+        .filter(CalibrationArtifact.portfolio_id == port.id)
+        .order_by(CalibrationArtifact.created_at.desc())
+        .limit(20).all()
+    )
+    return [{
+        "id": item.id,
+        "version": item.version,
+        "status": item.status,
+        "train_sample_size": item.train_sample_size,
+        "oos_sample_size": item.oos_sample_size,
+        "observed_regimes": item.observed_regimes,
+        "brier_before": item.brier_before,
+        "brier_after": item.brier_after,
+        "ece_after": item.ece_after,
+        "rejection_reason_fa": item.rejection_reason_fa,
+        "created_at": item.created_at.isoformat(),
+        "activated_at": item.activated_at.isoformat() if item.activated_at else None,
+    } for item in artifacts]
+
+
+@router.post("/calibration/train-candidate")
+def train_calibration_candidate(
+    db: Session = Depends(get_sync_db),
+    current_user: dict = Depends(get_current_user),
+):
+    port = get_active_campaign_portfolio(db)
+    if not port:
+        raise HTTPException(status_code=409, detail="کمپین کاغذی فعال موجود نیست.")
+    result = train_candidate(db, port.id)
+    db.commit()
+    if result.artifact is None:
+        raise HTTPException(status_code=409, detail=result.reason_fa)
+    return {
+        "success": result.allowed,
+        "message": result.reason_fa,
+        "artifact_id": result.artifact.id,
+        "status": result.artifact.status,
+        "eligible_samples": result.eligible_samples,
+        "observed_regimes": list(result.observed_regimes),
+        "brier_before": result.artifact.brier_before,
+        "brier_after": result.artifact.brier_after,
+    }
+
+
+@router.post("/calibration/{artifact_id}/activate")
+def activate_calibration_candidate(
+    artifact_id: str,
+    db: Session = Depends(get_sync_db),
+    current_user: dict = Depends(get_current_user),
+):
+    port = get_active_campaign_portfolio(db)
+    artifact = db.query(CalibrationArtifact).filter(
+        CalibrationArtifact.id == artifact_id,
+        CalibrationArtifact.portfolio_id == (port.id if port else "__missing_campaign__"),
+    ).first()
+    if not artifact:
+        raise HTTPException(status_code=404, detail="نسخه تنظیم احتمال در کمپین فعال پیدا نشد.")
+    try:
+        activate_candidate(db, artifact, str(current_user.get("sub") or "system-owner"))
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    db.commit()
+    return {"success": True, "message": "نسخه تأییدشده فعال و نسخه قبلی آرشیو شد.", "version": artifact.version}
+
+
 @router.get("/post-mortems", response_model=list[StructuredLessonResponse])
 def get_post_mortems_feed(category: str | None = None, db: Session = Depends(get_sync_db)):
     """Returns structured lessons extracted from closed trades."""
-    from apps.api.routes.history import _seed_initial_closed_trades_if_empty
-    _seed_initial_closed_trades_if_empty(db)
-
-    query = db.query(StructuredLesson).order_by(StructuredLesson.created_at.desc())
+    port = get_active_campaign_portfolio(db)
+    query = (
+        db.query(StructuredLesson)
+        .join(ClosedTradeHistory, StructuredLesson.trade_id == ClosedTradeHistory.id)
+        .filter(ClosedTradeHistory.portfolio_id == (port.id if port else "__missing_campaign__"))
+        .order_by(StructuredLesson.created_at.desc())
+    )
     if category:
         query = query.filter(StructuredLesson.category == category.upper())
 
@@ -186,10 +327,14 @@ def get_post_mortems_feed(category: str | None = None, db: Session = Depends(get
 @router.get("/research-queue", response_model=list[ExperimentProposalResponse])
 def get_research_queue(status: str | None = None, db: Session = Depends(get_sync_db)):
     """Returns research queue experiment proposals (Champion vs Challenger)."""
-    from apps.api.routes.history import _seed_initial_closed_trades_if_empty
-    _seed_initial_closed_trades_if_empty(db)
-
-    query = db.query(ExperimentProposal).order_by(ExperimentProposal.created_at.desc())
+    port = get_active_campaign_portfolio(db)
+    query = (
+        db.query(ExperimentProposal)
+        .join(StructuredLesson, ExperimentProposal.source_lesson_id == StructuredLesson.id)
+        .join(ClosedTradeHistory, StructuredLesson.trade_id == ClosedTradeHistory.id)
+        .filter(ClosedTradeHistory.portfolio_id == (port.id if port else "__missing_campaign__"))
+        .order_by(ExperimentProposal.created_at.desc())
+    )
     if status:
         query = query.filter(ExperimentProposal.status == status.upper())
 
@@ -229,40 +374,66 @@ def get_research_queue(status: str | None = None, db: Session = Depends(get_sync
 
 
 @router.post("/proposals/{proposal_id}/action")
-def handle_proposal_action(proposal_id: str, req: ProposalActionRequest, db: Session = Depends(get_sync_db)):
+def handle_proposal_action(
+    proposal_id: str,
+    req: ProposalActionRequest,
+    db: Session = Depends(get_sync_db),
+    current_user: dict = Depends(get_current_user),
+):
     """Advances proposal lifecycle in the research queue. Production promotion requires explicit approval."""
-    prop = db.query(ExperimentProposal).filter(ExperimentProposal.id == proposal_id).first()
+    port = get_active_campaign_portfolio(db)
+    prop = (
+        db.query(ExperimentProposal)
+        .join(StructuredLesson, ExperimentProposal.source_lesson_id == StructuredLesson.id)
+        .join(ClosedTradeHistory, StructuredLesson.trade_id == ClosedTradeHistory.id)
+        .filter(
+            ExperimentProposal.id == proposal_id,
+            ClosedTradeHistory.portfolio_id == (port.id if port else "__missing_campaign__"),
+        )
+        .first()
+    )
     if not prop:
         raise HTTPException(status_code=404, detail="فرضیه مورد نظر در صف تحقیقات یافت نشد.")
 
+    allowed_from = {
+        "backtest": {"PROPOSED"},
+        "oos_validate": {"BACKTESTING"},
+        "paper_challenger": {"OOS_TESTING"},
+        "approve": {"PAPER_CHALLENGER"},
+        "promote": {"APPROVED"},
+        "reject": {"PROPOSED", "BACKTESTING", "OOS_TESTING", "PAPER_CHALLENGER", "APPROVED"},
+    }
+    if prop.status not in allowed_from[req.action]:
+        raise HTTPException(status_code=409, detail=f"گذار {prop.status} به عملیات {req.action} مجاز نیست.")
+
     if req.action == "backtest":
-        prop.status = "BACKTESTING"
-        prop.backtest_metrics = {
-            "historical_win_rate": 64.2,
-            "historical_profit_factor": 2.05,
-            "historical_expectancy_R": 0.52,
-            "sample_size": 112,
-        }
+        raise HTTPException(
+            status_code=409,
+            detail="این فرضیه هنوز تغییر پارامتر و اجرای بک‌تست ثبت‌شده ندارد؛ وضعیت آن به‌صورت نمایشی تغییر داده نشد.",
+        )
     elif req.action == "oos_validate":
-        prop.status = "OOS_TESTING"
-        prop.oos_metrics = {
-            "oos_win_rate": 61.8,
-            "oos_profit_factor": 1.88,
-            "oos_expectancy_R": 0.44,
-            "oos_sample_size": 48,
-        }
+        raise HTTPException(
+            status_code=409,
+            detail="اجرای OOS برای این فرضیه به runner زمان‌محور و نتیجه ثبت‌شده نیاز دارد؛ وضعیت آن به‌صورت نمایشی تغییر داده نشد.",
+        )
     elif req.action == "paper_challenger":
+        if not prop.oos_metrics or int(prop.oos_metrics.get("oos_sample_size", 0)) < 20:
+            raise HTTPException(status_code=409, detail="نتیجه OOS ثبت‌شده با حداقل ۲۰ نمونه برای تست کاغذی لازم است.")
         prop.status = "PAPER_CHALLENGER"
     elif req.action == "approve":
+        if prop.sample_sufficiency != "STATISTICALLY_STABLE":
+            raise HTTPException(status_code=409, detail="تأیید قبل از کفایت آماری مجاز نیست.")
         prop.status = "APPROVED"
-        prop.approved_by = req.approved_by or "کمیته ارزیابی استراتژی"
+        prop.approved_by = str(current_user.get("sub") or "authenticated-admin")
     elif req.action == "reject":
         prop.status = "REJECTED"
         prop.rejection_reason_fa = req.rejection_reason_fa or "تست خارج از نمونه (OOS) نشان‌دهنده برازش بیش‌ازحد (Overfitting) بود."
     elif req.action == "promote":
+        if not prop.backtest_metrics or not prop.oos_metrics:
+            raise HTTPException(status_code=409, detail="ارتقا بدون شواهد بک‌تست و OOS ثبت‌شده مجاز نیست.")
         prop.status = "PROMOTED"
         prop.promoted_at = now_utc()
-        prop.approved_by = req.approved_by or "مدیریت ارشد کمیته ریسک"
+        prop.approved_by = str(current_user.get("sub") or "authenticated-admin")
 
     db.commit()
     db.refresh(prop)
@@ -278,24 +449,48 @@ def handle_proposal_action(proposal_id: str, req: ProposalActionRequest, db: Ses
 @router.get("/breakdown/clusters")
 def get_failure_and_success_clusters(db: Session = Depends(get_sync_db)):
     """Returns cluster diagnostics for failed and successful trades, plus holding period distributions."""
+    port = get_active_campaign_portfolio(db)
+    trades = db.query(ClosedTradeHistory).filter(
+        ClosedTradeHistory.portfolio_id == (port.id if port else "__missing_campaign__")
+    ).order_by(ClosedTradeHistory.closed_at.asc()).all()
+    failed = [trade for trade in trades if trade.net_pnl < 0]
+    successful = [trade for trade in trades if trade.net_pnl > 0]
+
+    def grouped(rows: list[ClosedTradeHistory], key_fn, metric_name: str) -> list[dict]:
+        groups: dict[str, list[ClosedTradeHistory]] = defaultdict(list)
+        for row in rows:
+            groups[key_fn(row)].append(row)
+        output = []
+        total = len(rows)
+        for key, members in sorted(groups.items(), key=lambda item: len(item[1]), reverse=True):
+            output.append({
+                "title_fa": key,
+                "count": len(members),
+                "pct": round((len(members) / total) * 100.0, 1) if total else 0.0,
+                metric_name: round(sum(item.realized_R for item in members) / len(members), 2),
+                "evidence": "closed_trade_history",
+            })
+        return output
+
+    buckets = [
+        ("۱ تا ۳ روز", 1, 3),
+        ("۴ تا ۷ روز", 4, 7),
+        ("۸ تا ۱۵ روز", 8, 15),
+        ("۱۶ تا ۳۰ روز", 16, 30),
+        ("بیش از ۳۰ روز", 31, 10_000),
+    ]
+    holding = []
+    for label, low, high in buckets:
+        members = [trade for trade in trades if low <= trade.holding_sessions <= high]
+        wins = [trade for trade in members if trade.net_pnl > 0]
+        holding.append({
+            "bucket": label,
+            "trades_count": len(members),
+            "win_rate": round((len(wins) / len(members)) * 100.0, 1) if members else None,
+            "expectancy_R": round(sum(trade.realized_R for trade in members) / len(members), 2) if members else None,
+        })
     return {
-        "failed_clusters": [
-            {"title_fa": "شکست کاذب مقاومت (False Breakout)", "count": 14, "pct": 35.0, "avg_loss_R": -0.95, "root_cause_fa": "ورود در انتهای موج صعودی بدون حجم کافی"},
-            {"title_fa": "ورود دیرهنگام پس از نوسان شدید (Late Entry)", "count": 9, "pct": 22.5, "avg_loss_R": -1.10, "root_cause_fa": "فاصله زیاد با استاپ و نقض نسبت R/R"},
-            {"title_fa": "تغییر ناگهانی رژیم بازار به نزولی (Regime Conflict)", "count": 8, "pct": 20.0, "avg_loss_R": -1.00, "root_cause_fa": "افت شاخص کل و فعال‌سازی همزمان استاپ‌ها"},
-            {"title_fa": "عدم نقدشوندگی و صف فروش قفل (Liquidity Drag)", "count": 5, "pct": 12.5, "avg_loss_R": -1.25, "root_cause_fa": "اسلیپیج خروج در صف فروش نمادهای کوچک"},
-            {"title_fa": "خوانش نادرست افشای کدال (Codal Noise)", "count": 4, "pct": 10.0, "avg_loss_R": -0.85, "root_cause_fa": "تاثیر کوتاه‌مدت اطلاعیه خنثی"},
-        ],
-        "success_clusters": [
-            {"title_fa": "تأیید حجم غیرعادی و ورود پول هوشمند (Volume Surge)", "count": 32, "pct": 48.0, "avg_win_R": +2.65, "validation_fa": "مهارت سیستم و انطباق با رفتار پول حقیقی"},
-            {"title_fa": "همگرایی چند اندیکاتور مستقل (Indicator Confluence)", "count": 21, "pct": 31.5, "avg_win_R": +2.20, "validation_fa": "فیلتر نویز بالا با تایید ایچیموکو و RSI"},
-            {"title_fa": "پیشتازی چرخش صنعت (Sector Leadership)", "count": 14, "pct": 20.5, "avg_win_R": +2.40, "validation_fa": "بهره‌گیری از مومنتوم گروه برتر بازار"},
-        ],
-        "holding_period_buckets": [
-            {"bucket": "۱ تا ۳ روز", "trades_count": 18, "win_rate": 55.5, "expectancy_R": +0.28},
-            {"bucket": "۴ تا ۷ روز", "trades_count": 42, "win_rate": 66.7, "expectancy_R": +0.54},
-            {"bucket": "۸ تا ۱۵ روز", "trades_count": 28, "win_rate": 64.2, "expectancy_R": +0.48},
-            {"bucket": "۱۶ تا ۳۰ روز", "trades_count": 11, "win_rate": 54.5, "expectancy_R": +0.22},
-            {"bucket": "بیش از ۳۰ روز", "trades_count": 4, "win_rate": 50.0, "expectancy_R": +0.10},
-        ],
+        "failed_clusters": grouped(failed, lambda row: row.exit_reason or "نامشخص", "avg_loss_R"),
+        "success_clusters": grouped(successful, lambda row: row.strategy_name_fa or row.strategy_id, "avg_win_R"),
+        "holding_period_buckets": holding,
     }

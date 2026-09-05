@@ -1,137 +1,178 @@
-"""Tehran Stock Exchange (TSE) Trading Hours and Adaptive Cadence Engine."""
-from datetime import datetime, time, timezone, timedelta
-from typing import Tuple
+"""Tehran market calendar and the sole live-upstream request window.
+
+The ordinary cash session is Saturday-Wednesday, 09:00-12:30 Asia/Tehran.
+TAL (12:45-13:00) is intentionally not mixed into this feed because it has a
+different instrument/session contract. No TSETMC request is allowed outside
+the ordinary continuous session.
+"""
+from __future__ import annotations
+
+from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
-import jdatetime
 
-from packages.shared.datetime_utils import now_utc
-from packages.shared.logger import logger
+from packages.shared.datetime_utils import to_jalali_str
 
-# Tehran Timezone
+
 TEHRAN_TZ = ZoneInfo("Asia/Tehran")
-
-# Official TSE Trading Sessions (Tehran Local Time)
-# Pre-market / Auction: 08:45 - 09:00
-# Continuous Trading: 09:00 - 12:30
 TSE_PREMARKET_START = time(8, 45)
 TSE_MARKET_OPEN = time(9, 0)
 TSE_MARKET_CLOSE = time(12, 30)
 
-# Weekly working days in Iran: Saturday (0 in Jalali, 5 in Gregorian ISO) to Wednesday (4 in Jalali, 2 in Gregorian ISO)
-# In Python datetime.weekday(): Monday=0, Tuesday=1, Wednesday=2, Thursday=3, Friday=4, Saturday=5, Sunday=6
-IRAN_TRADING_WEEKDAYS = {5, 6, 0, 1, 2}  # شنبه، یکشنبه، دوشنبه، سه‌شنبه، چهارشنبه
+# datetime.weekday(): Monday=0 ... Saturday=5, Sunday=6.
+IRAN_TRADING_WEEKDAYS = {5, 6, 0, 1, 2}
+
+
+def _as_tehran(dt: datetime | None) -> datetime:
+    if dt is None:
+        return datetime.now(TEHRAN_TZ)
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=TEHRAN_TZ)
+    return dt.astimezone(TEHRAN_TZ)
+
+
+def _parse_holiday_dates(raw: str) -> frozenset[date]:
+    values: set[date] = set()
+    for item in (raw or "").replace(";", ",").split(","):
+        value = item.strip()
+        if not value:
+            continue
+        try:
+            values.add(date.fromisoformat(value))
+        except ValueError:
+            # An invalid optional date must not crash availability endpoints.
+            continue
+    return frozenset(values)
+
+
+def configured_market_holidays() -> frozenset[date]:
+    """Return operator-reviewed Gregorian closure dates from configuration."""
+    from packages.shared.config import settings
+
+    return _parse_holiday_dates(settings.iran_market_holidays)
 
 
 def get_tehran_now() -> datetime:
-    """Returns current datetime in Tehran timezone."""
     return datetime.now(TEHRAN_TZ)
 
 
-def is_tse_trading_day(dt: datetime | None = None) -> bool:
-    """Returns True if the given date is an official trading weekday (Sat-Wed)."""
-    if dt is None:
-        dt = get_tehran_now()
-    elif dt.tzinfo is None:
-        dt = dt.replace(tzinfo=TEHRAN_TZ)
-    else:
-        dt = dt.astimezone(TEHRAN_TZ)
-
-    # Check weekday (Saturday=5 to Wednesday=2)
-    return dt.weekday() in IRAN_TRADING_WEEKDAYS
+def is_tse_trading_day(
+    dt: datetime | None = None,
+    *,
+    holiday_dates: frozenset[date] | set[date] | None = None,
+) -> bool:
+    """True only for a Sat-Wed date that is not a configured closure."""
+    local = _as_tehran(dt)
+    holidays = configured_market_holidays() if holiday_dates is None else holiday_dates
+    return local.weekday() in IRAN_TRADING_WEEKDAYS and local.date() not in holidays
 
 
-def is_tse_market_open(dt: datetime | None = None) -> bool:
-    """
-    Returns True if current time is within official continuous trading hours
-    (09:00 to 12:30 Tehran time on Saturday through Wednesday).
-    """
-    if dt is None:
-        dt = get_tehran_now()
-    elif dt.tzinfo is None:
-        dt = dt.replace(tzinfo=TEHRAN_TZ)
-    else:
-        dt = dt.astimezone(TEHRAN_TZ)
-
-    if not is_tse_trading_day(dt):
+def is_tse_market_open(
+    dt: datetime | None = None,
+    *,
+    holiday_dates: frozenset[date] | set[date] | None = None,
+) -> bool:
+    """True during the half-open ordinary session [09:00, 12:30)."""
+    local = _as_tehran(dt)
+    if not is_tse_trading_day(local, holiday_dates=holiday_dates):
         return False
-
-    current_time = dt.time()
-    return TSE_MARKET_OPEN <= current_time <= TSE_MARKET_CLOSE
+    return TSE_MARKET_OPEN <= local.time() < TSE_MARKET_CLOSE
 
 
-def is_tse_premarket(dt: datetime | None = None) -> bool:
-    """Returns True during pre-market order entry auction (08:45 - 09:00)."""
-    if dt is None:
-        dt = get_tehran_now()
-    elif dt.tzinfo is None:
-        dt = dt.replace(tzinfo=TEHRAN_TZ)
-    else:
-        dt = dt.astimezone(TEHRAN_TZ)
-
-    if not is_tse_trading_day(dt):
+def is_tse_premarket(
+    dt: datetime | None = None,
+    *,
+    holiday_dates: frozenset[date] | set[date] | None = None,
+) -> bool:
+    local = _as_tehran(dt)
+    if not is_tse_trading_day(local, holiday_dates=holiday_dates):
         return False
+    return TSE_PREMARKET_START <= local.time() < TSE_MARKET_OPEN
 
-    current_time = dt.time()
-    return TSE_PREMARKET_START <= current_time < TSE_MARKET_OPEN
+
+def next_tse_market_open(
+    dt: datetime | None = None,
+    *,
+    holiday_dates: frozenset[date] | set[date] | None = None,
+) -> datetime:
+    """Return the next ordinary-session open in Asia/Tehran."""
+    local = _as_tehran(dt)
+    holidays = configured_market_holidays() if holiday_dates is None else holiday_dates
+    if is_tse_market_open(local, holiday_dates=holidays):
+        return local
+    if is_tse_trading_day(local, holiday_dates=holidays) and local.time() < TSE_MARKET_OPEN:
+        return datetime.combine(local.date(), TSE_MARKET_OPEN, tzinfo=TEHRAN_TZ)
+
+    for offset in range(1, 370):
+        candidate_day = local.date() + timedelta(days=offset)
+        candidate = datetime.combine(candidate_day, TSE_MARKET_OPEN, tzinfo=TEHRAN_TZ)
+        if is_tse_trading_day(candidate, holiday_dates=holidays):
+            return candidate
+    raise RuntimeError("No Tehran trading day found in the configured calendar horizon.")
+
+
+def seconds_until_next_market_open(dt: datetime | None = None) -> int:
+    local = _as_tehran(dt)
+    if is_tse_market_open(local):
+        return 0
+    return max(1, int((next_tse_market_open(local) - local).total_seconds()))
 
 
 def get_market_session_state(dt: datetime | None = None) -> dict:
-    """Returns full market status dictionary with Persian labels and cadence."""
-    if dt is None:
-        dt = get_tehran_now()
-    elif dt.tzinfo is None:
-        dt = dt.replace(tzinfo=TEHRAN_TZ)
-    else:
-        dt = dt.astimezone(TEHRAN_TZ)
-
-    is_open = is_tse_market_open(dt)
-    is_pre = is_tse_premarket(dt)
-    is_workday = is_tse_trading_day(dt)
+    """Return an API-safe market state and exact upstream request policy."""
+    local = _as_tehran(dt)
+    holidays = configured_market_holidays()
+    is_holiday = local.date() in holidays
+    is_open = is_tse_market_open(local, holiday_dates=holidays)
+    is_pre = is_tse_premarket(local, holiday_dates=holidays)
+    is_workday = is_tse_trading_day(local, holiday_dates=holidays)
 
     if is_open:
         status_code = "OPEN"
-        status_fa = "بازار باز است (معاملات پیوسته)"
-        cadence_seconds = 10  # Ultra-fast 10-second live updates during continuous trading
-        auto_trade_interval_minutes = 3  # Run auto-trader every 3 minutes during market hours
-    elif is_pre:
-        status_code = "PRE_MARKET"
-        status_fa = "پیش‌گشایش و حراج اولیه (ثبت سفارش)"
-        cadence_seconds = 15
-        auto_trade_interval_minutes = 10
-    elif is_workday and dt.time() < TSE_PREMARKET_START:
-        status_code = "PRE_SESSION"
-        status_fa = "قبل از شروع بازار (انتظار برای پیش‌گشایش)"
+        status_fa = "بازار باز است — دریافت زنده هر ۶۰ ثانیه"
         cadence_seconds = 60
-        auto_trade_interval_minutes = 30
-    elif is_workday and dt.time() > TSE_MARKET_CLOSE:
-        status_code = "POST_MARKET"
-        status_fa = "بسته — تسویه و محاسبات پایانی روز"
-        cadence_seconds = 60  # 1 min when market is closed
-        auto_trade_interval_minutes = 60
+        next_open = local
     else:
-        status_code = "WEEKEND"
-        status_fa = "تعطیلات پایان هفته (پنجشنبه و جمعه)"
-        cadence_seconds = 120  # 2 min during weekend
-        auto_trade_interval_minutes = 120
+        next_open = next_tse_market_open(local, holiday_dates=holidays)
+        cadence_seconds = max(1, int((next_open - local).total_seconds()))
+        if is_holiday:
+            status_code = "HOLIDAY"
+            status_fa = "تعطیل رسمی بازار — درخواست منبع متوقف است"
+        elif is_pre:
+            status_code = "PRE_MARKET"
+            status_fa = "پیش‌گشایش — دریافت زنده از ساعت ۰۹:۰۰ آغاز می‌شود"
+        elif is_workday and local.time() < TSE_PREMARKET_START:
+            status_code = "PRE_SESSION"
+            status_fa = "پیش از جلسه — درخواست منبع متوقف است"
+        elif is_workday and local.time() >= TSE_MARKET_CLOSE:
+            status_code = "POST_MARKET"
+            status_fa = "بازار بسته — آخرین snapshot تا جلسه بعد نمایش داده می‌شود"
+        else:
+            status_code = "WEEKEND"
+            status_fa = "تعطیلات پایان هفته — درخواست منبع متوقف است"
 
+    next_open_utc = next_open.astimezone(timezone.utc)
     return {
         "status_code": status_code,
         "status_fa": status_fa,
         "is_open": is_open,
         "is_premarket": is_pre,
         "is_workday": is_workday,
+        "is_holiday": is_holiday,
+        "upstream_requests_allowed": is_open,
+        "live_collection_allowed": is_open,
         "cadence_seconds": cadence_seconds,
-        "auto_trade_interval_minutes": auto_trade_interval_minutes,
-        "tehran_time": dt.strftime("%H:%M:%S"),
-        "tehran_date": dt.strftime("%Y-%m-%d"),
+        "auto_trade_interval_minutes": 1 if is_open else max(1, (cadence_seconds + 59) // 60),
+        "seconds_until_next_open": 0 if is_open else cadence_seconds,
+        "next_open_at_tehran": next_open.isoformat(),
+        "next_open_at_utc": next_open_utc.isoformat(),
+        "next_open_jalali": to_jalali_str(next_open, include_time=True),
+        "session_open_tehran": "09:00:00",
+        "session_close_tehran": "12:30:00",
+        "tehran_time": local.strftime("%H:%M:%S"),
+        "tehran_date": local.strftime("%Y-%m-%d"),
     }
 
 
 def get_dynamic_scheduler_cadence_seconds() -> int:
-    """
-    Returns appropriate sleep interval in seconds based on current market state:
-    - Market Open: 900 seconds (15 min) for active scan & trade
-    - Market Closed / Weekend: 3600 seconds (60 min) or 7200 seconds (120 min)
-    """
-    state = get_market_session_state()
-    return state["auto_trade_interval_minutes"] * 60
+    """One minute in-session; otherwise sleep exactly until the next open."""
+    return get_market_session_state()["cadence_seconds"]

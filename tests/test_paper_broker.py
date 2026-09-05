@@ -48,8 +48,10 @@ def test_paper_broker_position_sizing_and_risk():
 
     order, msg = broker.create_order_from_signal(port, sig, current_market_price=10000.0, quantity=qty)
     assert order is not None
-    assert len(port.positions) == 1
-    assert port.cash < 1_000_000_000.0
+    assert order.status == "SUBMITTED"
+    assert order.filled_quantity == 0
+    assert len(port.positions) == 0
+    assert port.cash == 1_000_000_000.0
 
 
 def test_kill_switch_blocks_orders():

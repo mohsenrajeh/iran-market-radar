@@ -57,8 +57,8 @@ class ExecutionSimulator:
         """
         # Guard against zero volume or missing bar
         if not next_bar or next_bar.get("volume", 0) <= 0:
-            order.status = "EXPIRED"
-            return None, "عدم انجام معامله در کندل بعدی (فاقد حجم معاملاتی)"
+            order.status = "SUBMITTED"
+            return None, "سفارش در صف ماند؛ snapshot بعدی حجم معاملاتی نداشت."
 
         bar_high = next_bar["high"]
         bar_low = next_bar["low"]
@@ -75,23 +75,32 @@ class ExecutionSimulator:
                 order.status = "REJECTED"
                 return None, "سفارش به دلیل قفل صف خرید در سقف قیمت (Limit-Up Queue) رد شد."
 
+            already_filled = int(order.filled_quantity or 0)
+            remaining_quantity = max(0, order.quantity - already_filled)
+            if remaining_quantity <= 0:
+                order.status = "FILLED"
+                return None, "سفارش قبلاً به‌طور کامل اجرا شده است."
+            if bar_low > order.price:
+                order.status = "PARTIALLY_FILLED" if already_filled else "SUBMITTED"
+                return None, "قیمت بازار به سقف سفارش خرید نرسید؛ سفارش در صف باقی ماند."
+
             # Auction Opening fill with modeled slippage
             base_fill_price = bar_open if bar_open <= order.price else order.price
             
             # Slippage calculation based on volume participation
-            participation_rate = min(1.0, order.quantity / bar_volume) if bar_volume > 0 else 0.05
+            participation_rate = min(1.0, remaining_quantity / bar_volume) if bar_volume > 0 else 0.05
             slippage_pct = (self.default_slippage_bps / 10_000.0) + (participation_rate * 0.005)
             effective_fill_price = round(min(allowed_max, base_fill_price * (1.0 + slippage_pct)), 2)
 
             # Cap fill quantity by liquidity limit (Max 5% of volume in single bar)
             max_fillable_qty = max(100, int(bar_volume * participation_cap))
-            filled_qty = min(order.quantity, max_fillable_qty)
+            filled_qty = min(remaining_quantity, max_fillable_qty)
 
             fee_info = calculate_trade_fees(filled_qty * effective_fill_price, side="BUY")
             total_cost_rials = (filled_qty * effective_fill_price) + fee_info["total_fee_rials"]
 
-            order.filled_quantity = filled_qty
-            order.status = "FILLED" if filled_qty == order.quantity else "PARTIALLY_FILLED"
+            order.filled_quantity = already_filled + filled_qty
+            order.status = "FILLED" if order.filled_quantity == order.quantity else "PARTIALLY_FILLED"
             order.updated_at = now_utc()
 
             fill = OrderFill(
@@ -116,17 +125,27 @@ class ExecutionSimulator:
                 order.status = "REJECTED"
                 return None, "سفارش به دلیل قفل صف فروش در کف قیمت (Limit-Down Queue) رد شد."
 
+            already_filled = int(order.filled_quantity or 0)
+            remaining_quantity = max(0, order.quantity - already_filled)
+            if remaining_quantity <= 0:
+                order.status = "FILLED"
+                return None, "سفارش قبلاً به‌طور کامل اجرا شده است."
+            if bar_high < order.price:
+                order.status = "PARTIALLY_FILLED" if already_filled else "SUBMITTED"
+                return None, "قیمت بازار به کف سفارش فروش نرسید؛ سفارش در صف باقی ماند."
+
             base_fill_price = bar_open if bar_open >= order.price else order.price
-            participation_rate = min(1.0, order.quantity / bar_volume) if bar_volume > 0 else 0.05
+            participation_rate = min(1.0, remaining_quantity / bar_volume) if bar_volume > 0 else 0.05
             slippage_pct = (self.default_slippage_bps / 10_000.0) + (participation_rate * 0.005)
             effective_fill_price = round(max(allowed_min, base_fill_price * (1.0 - slippage_pct)), 2)
 
-            filled_qty = order.quantity
+            max_fillable_qty = max(1, int(bar_volume * participation_cap))
+            filled_qty = min(remaining_quantity, max_fillable_qty)
             fee_info = calculate_trade_fees(filled_qty * effective_fill_price, side="SELL")
             net_proceeds_rials = (filled_qty * effective_fill_price) - fee_info["total_fee_rials"]
 
-            order.filled_quantity = filled_qty
-            order.status = "FILLED"
+            order.filled_quantity = already_filled + filled_qty
+            order.status = "FILLED" if order.filled_quantity == order.quantity else "PARTIALLY_FILLED"
             order.updated_at = now_utc()
 
             fill = OrderFill(

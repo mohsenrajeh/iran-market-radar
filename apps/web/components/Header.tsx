@@ -24,6 +24,8 @@ interface HeaderProps {
   isAutoRefreshEnabled?: boolean;
   onToggleAutoRefresh?: () => void;
   cadenceSeconds?: number;
+  marketSession?: any;
+  lastMarketUpdateAt?: string;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -38,12 +40,21 @@ export const Header: React.FC<HeaderProps> = ({
   onSelectSymbol,
   isAutoRefreshEnabled = true,
   onToggleAutoRefresh,
-  cadenceSeconds = 10,
+  cadenceSeconds = 60,
+  marketSession,
+  lastMarketUpdateAt,
 }) => {
   const [searchQuery, setSearchQuery] = useState("");
   const [symbolsList, setSymbolsList] = useState<any[]>([]);
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const livePolling = Boolean(isAutoRefreshEnabled && marketSession?.upstream_requests_allowed);
+  const pollingColor = !isAutoRefreshEnabled ? "#ef4444" : livePolling ? "#22c55e" : "#f59e0b";
+  const pollingBackground = !isAutoRefreshEnabled
+    ? "rgba(239, 68, 68, 0.12)"
+    : livePolling
+      ? "rgba(34, 197, 94, 0.12)"
+      : "rgba(245, 158, 11, 0.12)";
 
   useEffect(() => {
     fetch("/api/v1/fundamentals/symbols")
@@ -88,6 +99,7 @@ export const Header: React.FC<HeaderProps> = ({
 
   return (
     <header
+      className="app-header"
       style={{
         backgroundColor: "var(--bg-secondary)",
         borderBottom: "1px solid var(--border-subtle)",
@@ -103,13 +115,13 @@ export const Header: React.FC<HeaderProps> = ({
       }}
     >
       {/* ── Title & Quick Symbol Search ─────────────────────────────── */}
-      <div style={{ display: "flex", alignItems: "center", gap: "1.25rem", flexWrap: "wrap" }}>
+      <div className="app-header-title" style={{ display: "flex", alignItems: "center", gap: "1.25rem", flexWrap: "wrap" }}>
         <h1 style={{ fontSize: "1.15rem", fontWeight: 800, color: "var(--text-primary)", margin: 0 }}>
           {currentViewTitle}
         </h1>
 
         {/* Global Quick Search Input */}
-        <div ref={dropdownRef} style={{ position: "relative", minWidth: "240px" }}>
+        <div className="app-header-search" ref={dropdownRef} style={{ position: "relative", minWidth: "240px" }}>
           <div
             style={{
               display: "flex",
@@ -183,7 +195,7 @@ export const Header: React.FC<HeaderProps> = ({
                     <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>{s.name_fa}</span>
                   </div>
                   <span style={{ fontSize: "0.72rem", color: "var(--tse-green)", fontWeight: 700 }}>
-                    نمره: {s.fundamental_score || 80}
+                    نمره: {s.fundamental_score ?? "—"}
                   </span>
                 </div>
               ))}
@@ -193,7 +205,7 @@ export const Header: React.FC<HeaderProps> = ({
       </div>
 
       {/* ── Real-time Status & Global Actions ───────────────────────── */}
-      <div style={{ display: "flex", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
+      <div className="app-header-status" style={{ display: "flex", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
         {/* Unified Global Refresh Button */}
         {onRefreshAll && (
           <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
@@ -208,25 +220,29 @@ export const Header: React.FC<HeaderProps> = ({
                   borderRadius: "6px",
                   fontSize: "0.78rem",
                   fontWeight: 700,
-                  backgroundColor: isAutoRefreshEnabled ? "rgba(34, 197, 94, 0.12)" : "rgba(239, 68, 68, 0.12)",
-                  color: isAutoRefreshEnabled ? "#22c55e" : "#ef4444",
-                  border: `1px solid ${isAutoRefreshEnabled ? "rgba(34, 197, 94, 0.35)" : "rgba(239, 68, 68, 0.35)"}`,
+                  backgroundColor: pollingBackground,
+                  color: pollingColor,
+                  border: `1px solid ${pollingColor}59`,
                   cursor: "pointer",
                   fontFamily: "inherit",
                   transition: "all 0.15s ease",
                 }}
-                title={isAutoRefreshEnabled ? "توقف موقت بروزرسانی خودکار برای مطالعه و اسکرول بدون جابجایی صفحه" : "فعال‌سازی مجدد بروزرسانی خودکار زنده"}
+                title={marketSession?.upstream_requests_allowed ? "توقف موقت پایش زنده بازار" : "بازار بسته است؛ دریافت زنده در بازگشایی بعدی خودکار آغاز می‌شود"}
               >
                 <span
                   style={{
                     width: "8px",
                     height: "8px",
                     borderRadius: "50%",
-                    backgroundColor: isAutoRefreshEnabled ? "#22c55e" : "#ef4444",
+                    backgroundColor: pollingColor,
                     display: "inline-block",
                   }}
                 />
-                <span>{isAutoRefreshEnabled ? `خودکار: روشن (${(cadenceSeconds || 10).toLocaleString("fa-IR")}ث)` : "خودکار: متوقف"}</span>
+                <span>{isAutoRefreshEnabled
+                  ? marketSession?.upstream_requests_allowed
+                    ? `پایش زنده: روشن (${(cadenceSeconds ?? 60).toLocaleString("fa-IR")}ث)`
+                    : "بازار بسته؛ دریافت upstream متوقف"
+                  : "پایش داده: متوقف"}</span>
               </button>
             )}
 
@@ -270,8 +286,13 @@ export const Header: React.FC<HeaderProps> = ({
                 }}
                 className="tabular-num"
               >
-                <span>همگام‌سازی:</span>
+                <span>{marketSession?.upstream_requests_allowed ? "نمایش محلی:" : "آخرین مشاهده محلی:"}</span>
                 <strong style={{ color: "var(--text-secondary)" }}>{lastUpdatedTime}</strong>
+              </span>
+            )}
+            {!marketSession?.upstream_requests_allowed && lastMarketUpdateAt && (
+              <span style={{ fontSize: "0.72rem", color: "var(--tse-gold)", backgroundColor: "var(--tse-amber-subtle)", padding: "0.3rem 0.6rem", borderRadius: "4px" }}>
+                آخرین batch ثبت‌شده: {new Date(lastMarketUpdateAt).toLocaleString("fa-IR", { timeZone: "Asia/Tehran", hour: "2-digit", minute: "2-digit" })}
               </span>
             )}
           </div>
@@ -311,7 +332,7 @@ export const Header: React.FC<HeaderProps> = ({
           }}
         >
           <ShieldCheck size={14} color="var(--tse-blue)" />
-          <span>پورتفوی ۱ میلیارد تومانی (کاغذی)</span>
+          <span>پورتفوی ۱۰ میلیارد تومانی (کاغذی)</span>
         </div>
 
         {/* Jalali Clock */}
@@ -326,7 +347,7 @@ export const Header: React.FC<HeaderProps> = ({
           }}
         >
           <Clock size={14} />
-          <span className="tabular-num">{jalaliTime || "۱۴۰۵/۰۵/۲۴ ۱۲:۳۰"}</span>
+          <span className="tabular-num">{jalaliTime || "در انتظار زمان سرور"}</span>
         </div>
       </div>
     </header>
